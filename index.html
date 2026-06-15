@@ -456,7 +456,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
   *{box-sizing:border-box}
-  html,body{margin:0;padding:0}
+  html,body{margin:0;padding:0;max-width:100%;overflow-x:hidden}
   body{font-family:var(--font);color:var(--ink);background:var(--paper);line-height:1.45;-webkit-font-smoothing:antialiased}
   a{color:var(--green-mid)}
 
@@ -475,13 +475,13 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   .section > .hint{color:var(--muted);font-size:13px;margin:0 0 18px}
 
   .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px 20px}
-  .field{display:flex;flex-direction:column;gap:6px}
+  .field{display:flex;flex-direction:column;gap:6px;min-width:0}
   .field.full{grid-column:1 / -1}
   label{font-size:13px;font-weight:600;color:var(--ink)}
   label .req{color:var(--danger);margin-left:2px}
   input[type=text],input[type=email],input[type=date],input[type=number],select,textarea{
     font-family:inherit;font-size:14px;color:var(--ink);border:1px solid var(--line-strong);border-radius:8px;
-    padding:9px 11px;background:#fff;width:100%;transition:border-color .12s, box-shadow .12s}
+    padding:9px 11px;background:#fff;width:100%;min-width:0;max-width:100%;transition:border-color .12s, box-shadow .12s}
   textarea{resize:vertical;min-height:38px}
   input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green-mid);box-shadow:0 0 0 3px rgba(43,82,51,.14)}
   input.invalid,select.invalid,textarea.invalid{border-color:var(--danger);box-shadow:0 0 0 3px rgba(178,58,46,.12)}
@@ -506,7 +506,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   .item-id .num{background:var(--green-dark);color:#fff;width:24px;height:24px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:13px;font-weight:700}
   .item-total-mini{font-size:13px;color:var(--muted);font-weight:600}
   .item-body{padding:18px 16px}
-  .item-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px 16px}
+  .item-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px 16px;min-width:0}
   .item-grid .wide{grid-column:1 / -1}
   .item-grid .span2{grid-column:span 2}
 
@@ -528,6 +528,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   .filechip .fsize{color:var(--muted);flex:none}
 
   .totalsbar{position:fixed;left:0;right:0;bottom:0;z-index:40;background:var(--green-dark);color:#fff;border-top:3px solid var(--green-mid);box-shadow:0 -6px 24px rgba(0,0,0,.14)}
+  .totalsbar.kb-hidden{display:none}
   .totalsbar .wrap{display:flex;align-items:center;justify-content:space-between;gap:18px;padding-top:13px;padding-bottom:13px;flex-wrap:wrap}
   .totals-figs{display:flex;gap:26px;flex-wrap:wrap}
   .tfig .k{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#9FBCA8;font-weight:700}
@@ -1443,21 +1444,22 @@ async function submit(){
   const blob=new Blob([pdfBytes],{type:"application/pdf"});
   const t=totalsByCurrency(data.rows);
   const subject=data.header.name+"'s Expense Report";
-  const recipients="To: "+data.header.empEmail+"\nCc: "+data.header.mgrEmail+", "+PROCESSING_EMAIL;
+  const sendTo="Send to: "+data.header.empEmail+"; "+data.header.mgrEmail+"; "+PROCESSING_EMAIL;
   const summary=["Hi,","","Please find my expense report for approval and processing.","",
     "Employee: "+data.header.name,
     "Function: "+data.header.dept+(data.header.locCode?(" ("+data.header.locCode+")"):""),
     "Period: "+data.header.from+" to "+data.header.to,
     "Items: "+data.rows.length,
-    "Total (CAD): $"+t.CAD.total.toFixed(2),"Total (USD): $"+t.USD.total.toFixed(2),
-    "","Thank you,",data.header.name].join("\n");
+    "Total (CAD): $"+t.CAD.total.toFixed(2),"Total (USD): $"+t.USD.total.toFixed(2),"",
+    sendTo,"","Thank you,",data.header.name].join("\n");
 
   // Preferred: hand the PDF to the OS share sheet so it arrives already attached (mobile + supported desktop).
+  // Lead the text with the subject so mail apps that derive the subject from the shared text keep it clean.
   try{
     const file=new File([blob], filename, {type:"application/pdf"});
     if(navigator.canShare && navigator.canShare({files:[file]})){
-      await navigator.share({ files:[file], title:subject, text:recipients+"\n\n"+summary });
-      toast("Shared — pick your mail app; the PDF is already attached. Add the recipients shown.");
+      await navigator.share({ files:[file], title:subject, text:subject+"\n\n"+summary });
+      toast("Shared — pick your mail app; the PDF is attached. Confirm the recipients before sending.");
       return;
     }
   }catch(e){
@@ -1565,6 +1567,16 @@ restoreAutosave();
 rebuildAllGl();
 addItem(); addItem(); addItem();
 recalc();
+
+// On phones, the on-screen keyboard can push the fixed bottom bar into the middle of the screen.
+// Hide it while a field is focused, restore it once editing stops.
+(function(){
+  const bar=document.querySelector(".totalsbar");
+  const small=()=>window.matchMedia("(max-width:760px)").matches;
+  const isField=el=>el&&el.matches&&el.matches("input,select,textarea");
+  document.addEventListener("focusin",e=>{ if(bar&&small()&&isField(e.target)) bar.classList.add("kb-hidden"); });
+  document.addEventListener("focusout",()=>{ setTimeout(()=>{ if(!bar)return; if(!small()||!isField(document.activeElement)) bar.classList.remove("kb-hidden"); },120); });
+})();
 </script>
 </body>
 </html>
