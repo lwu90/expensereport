@@ -845,7 +845,11 @@ function itemTemplate(internalId){
           <label>Expense type <span class="req">*</span></label>
           <select data-f="type"><option value="invoice">Invoice</option><option value="mileage">Mileage</option></select>
         </div>
-        <div class="field span2"></div>
+        <div class="field span2">
+          <label data-datelabel>Expense date <span class="req">*</span></label>
+          <input type="date" data-f="itemdate" />
+          <span class="err" data-itemerr="itemdate">Select the date.</span>
+        </div>
 
         <div class="field wide">
           <label>Description/Purpose <span class="req">*</span></label>
@@ -959,6 +963,8 @@ function addItem(){
 
 function applyTypeUI(node){
   const type=node.querySelector('[data-f="type"]').value;
+  const dl=node.querySelector("[data-datelabel]");
+  if(dl) dl.innerHTML=(type==="mileage"?"Trip date":"Expense date")+' <span class="req">*</span>';
   node.querySelectorAll('[data-mode="invoice"]').forEach(el=>el.style.display = type==="invoice" ? "" : "none");
   node.querySelectorAll('[data-mode="mileage"]').forEach(el=>el.style.display = type==="mileage" ? "" : "none");
   const glcw=node.querySelector("[data-glcustomwrap]");
@@ -1089,10 +1095,11 @@ function readItem(node){
   const type=g("type").value;
   const description=g("description").value.trim();
   const project=(g("project").value||"").trim();
+  const date=g("itemdate").value;
   if(type==="mileage"){
     const distance=parseFloat(g("distance").value)||0;
     const amount=+(distance*MILEAGE_RATE).toFixed(2);
-    return {type, description, project, fromAddr:g("fromaddr").value.trim(), toAddr:g("toaddr").value.trim(), distance,
+    return {type, date, description, project, fromAddr:g("fromaddr").value.trim(), toAddr:g("toaddr").value.trim(), distance,
       province:"", currency:"CAD", amount, tax:0, total:amount, glVal:"", glCode:travelGlFor($("empDept").value), glLabel:"Travel (mileage)"};
   }
   const amount=parseFloat(g("amount").value)||0;
@@ -1102,7 +1109,7 @@ function readItem(node){
   let glCode="",glLabel="";
   if(glVal===OTHER_GL){ glCode=(g("glcustom").value||"").trim(); glLabel="Other (custom)"; }
   else if(glVal){ const [code,idx]=glVal.split("||"); glCode=code; const e=glListFor($("empDept").value)[Number(idx)]; glLabel=e?e[1]:""; }
-  return {type, description, project, province:g("province").value, currency, amount, tax, total:amount+tax, glVal, glCode, glLabel, fromAddr:"", toAddr:"", distance:0};
+  return {type, date, description, project, province:g("province").value, currency, amount, tax, total:amount+tax, glVal, glCode, glLabel, fromAddr:"", toAddr:"", distance:0};
 }
 
 function checkTaxWarning(node){
@@ -1175,14 +1182,14 @@ function validate(){
     const desc=g("description").value.trim();
     let rowOk=true;
     if(type==="mileage"){
-      const started=desc||g("fromaddr").value.trim()||g("toaddr").value.trim()||g("distance").value!=="";
+      const started=desc||g("fromaddr").value.trim()||g("toaddr").value.trim()||g("distance").value!==""||g("itemdate").value;
       if(!started) return;
       if(!desc){ rowOk=false; fail(g("description"),"description"); }
       if(!g("fromaddr").value.trim()){ rowOk=false; fail(g("fromaddr"),"fromaddr"); }
       if(!g("toaddr").value.trim()){ rowOk=false; fail(g("toaddr"),"toaddr"); }
       if(!(parseFloat(g("distance").value)>0)){ rowOk=false; fail(g("distance"),"distance"); }
     } else {
-      const started=desc||g("amount").value!=="";
+      const started=desc||g("amount").value!==""||g("itemdate").value;
       if(!started) return;
       if(!desc){ rowOk=false; fail(g("description"),"description"); }
       if(!g("province").value){ rowOk=false; fail(g("province"),"province"); }
@@ -1192,6 +1199,7 @@ function validate(){
     }
     const proj=(g("project").value||"").trim();
     if(proj && !/^\d{2}$/.test(proj)){ rowOk=false; fail(g("project"),"project"); }
+    if(!g("itemdate").value){ rowOk=false; fail(g("itemdate"),"itemdate"); }
     if(rowOk) anyValid=true;
   });
   if(!anyValid){ ok=false; toast("Add at least one complete expense item.",true); }
@@ -1215,8 +1223,8 @@ function gather(){
     const g=sel=>node.querySelector('[data-f="'+sel+'"]');
     const it=readItem(node);
     const started = it.type==="mileage"
-      ? (it.description||it.fromAddr||it.toAddr||g("distance").value!=="")
-      : (it.description||g("amount").value!=="");
+      ? (it.description||it.fromAddr||it.toAddr||g("distance").value!==""||it.date)
+      : (it.description||g("amount").value!==""||it.date);
     if(!started) return;
     rows.push({id:idx+1, iid:Number(node.dataset.iid), ...it});
   });
@@ -1261,15 +1269,15 @@ function buildPdf(data){
   y+=6;
   doc.autoTable({
     startY:y, margin:{left:M,right:M},
-    head:[["#","Type","Description / Purpose","GL","Region","Cur","Pre-Tax Amount","Sales Tax","Item Total","Files"]],
+    head:[["#","Type","Date","Description / Purpose","GL","Region","Cur","Pre-Tax Amount","Sales Tax","Item Total","Files"]],
     body:rows.map(r=>{ const files=r.type==="mileage"?"—":((itemFiles[r.iid]||[]).map((f,i)=>fileTag(r.id,i)).join(", ")||"—");
-      return [r.id, r.type==="mileage"?"Mileage":"Invoice", descForOutput(r), glDisplay(r,header.locCode), r.province||"—", r.currency, r.amount.toFixed(2), r.tax.toFixed(2), r.total.toFixed(2), files]; }),
+      return [r.id, r.type==="mileage"?"Mileage":"Invoice", r.date||"—", descForOutput(r), glDisplay(r,header.locCode), r.province||"—", r.currency, r.amount.toFixed(2), r.tax.toFixed(2), r.total.toFixed(2), files]; }),
     styles:{fontSize:8,cellPadding:3.5,overflow:"linebreak",valign:"top"},
     headStyles:{fillColor:[43,82,51],textColor:255,valign:"middle"},
     columnStyles:{
-      0:{cellWidth:20,halign:"right"}, 1:{cellWidth:46}, 2:{cellWidth:188}, 3:{cellWidth:96},
-      4:{cellWidth:108}, 5:{cellWidth:30}, 6:{cellWidth:66,halign:"right"}, 7:{cellWidth:56,halign:"right"},
-      8:{cellWidth:66,halign:"right"}, 9:{cellWidth:58}
+      0:{cellWidth:20,halign:"right"}, 1:{cellWidth:46}, 2:{cellWidth:60}, 3:{cellWidth:176}, 4:{cellWidth:92},
+      5:{cellWidth:92}, 6:{cellWidth:28}, 7:{cellWidth:64,halign:"right"}, 8:{cellWidth:54,halign:"right"},
+      9:{cellWidth:64,halign:"right"}, 10:{cellWidth:54}
     },
     theme:"striped",
   });
@@ -1474,7 +1482,7 @@ async function saveDraftToFile(){
   for(const node of $("items").children){
     const g=sel=>node.querySelector('[data-f="'+sel+'"]'); const iid=Number(node.dataset.iid);
     const files=[]; for(const f of (itemFiles[iid]||[])) files.push({name:f.name,dataURL:await fileToDataURL(f)});
-    draft.items.push({type:g("type").value,description:g("description").value,province:g("province").value,currency:g("currency").value,amount:g("amount").value,tax:g("tax").value,gl:g("gl").value,glcustom:g("glcustom").value,fromaddr:g("fromaddr").value,toaddr:g("toaddr").value,distance:g("distance").value,project:g("project").value,files});
+    draft.items.push({type:g("type").value,description:g("description").value,province:g("province").value,currency:g("currency").value,amount:g("amount").value,tax:g("tax").value,gl:g("gl").value,glcustom:g("glcustom").value,fromaddr:g("fromaddr").value,toaddr:g("toaddr").value,distance:g("distance").value,project:g("project").value,date:g("itemdate").value,files});
   }
   triggerDownload(new Blob([JSON.stringify(draft)],{type:"application/json"}),(fileBase(gather())||"ExpenseReport_draft")+".draft.json");
   $("saveState").textContent="Saved "+new Date().toLocaleTimeString();
@@ -1496,7 +1504,7 @@ function applyDraft(draft){
     g("currency").value=it.currency||"CAD"; g("amount").value=it.amount||""; g("tax").value=it.tax||"";
     g("gl").innerHTML=buildGlOptions(h.dept); if(it.gl){ g("gl").value=it.gl; }
     g("glcustom").value=it.glcustom||"";
-    g("fromaddr").value=it.fromaddr||""; g("toaddr").value=it.toaddr||""; g("distance").value=it.distance||""; g("project").value=it.project||"";
+    g("fromaddr").value=it.fromaddr||""; g("toaddr").value=it.toaddr||""; g("distance").value=it.distance||""; g("project").value=it.project||""; g("itemdate").value=it.date||"";
     (it.files||[]).forEach(fo=>{ try{ itemFiles[id].push(dataURLtoFile(fo.dataURL,fo.name)); }catch(e){} });
     applyTypeUI(node); renderFiles(id);
   });
