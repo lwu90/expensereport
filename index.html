@@ -677,7 +677,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   <!-- ============ SUBMIT INFO ============ -->
   <section class="section">
     <h2>Submit &amp; send</h2>
-    <p class="hint">Use the bar at the bottom of the screen to submit, download, or manage your draft — no need to scroll here. <strong>Submit &amp; prepare email</strong> builds one combined PDF (report + receipts). On phones and supported browsers it opens your mail app with the PDF already attached; on other browsers it downloads the PDF and opens a pre-filled email for you to attach it.</p>
+    <p class="hint">Use the bar at the bottom of the screen to submit, download, or manage your draft — no need to scroll here. <strong>Submit &amp; prepare email</strong> builds one combined PDF (report + receipts). On phones and tablets it opens your mail app with the PDF already attached; on computers it downloads the PDF and opens a pre-filled email (subject and recipients set) for you to attach the file.</p>
     <div class="note" id="processingNote"></div>
   </section>
 </main>
@@ -1451,15 +1451,18 @@ async function submit(){
     "Period: "+data.header.from+" to "+data.header.to,
     "Items: "+data.rows.length,
     "Total (CAD): $"+t.CAD.total.toFixed(2),"Total (USD): $"+t.USD.total.toFixed(2),"",
-    sendTo,"","Thank you,",data.header.name].join("\n");
+    "Thank you,",data.header.name].join("\n");
 
-  // Preferred: hand the PDF to the OS share sheet so it arrives already attached (mobile + supported desktop).
-  // Lead the text with the subject so mail apps that derive the subject from the shared text keep it clean.
+  // Preferred ON PHONES/TABLETS only: hand the PDF to the OS share sheet so it arrives already attached.
+  // Desktop share targets (e.g. Windows -> Outlook) drop the subject and attach an empty .tmp, so we
+  // restrict this to mobile-like devices (touch primary, no hover) and let desktops use the reliable path below.
+  // The shared text leads with the subject, then the recipients (so they're visible/copyable without scrolling).
+  const mobileLike = window.matchMedia && window.matchMedia("(pointer:coarse) and (hover:none)").matches;
   try{
     const file=new File([blob], filename, {type:"application/pdf"});
-    if(navigator.canShare && navigator.canShare({files:[file]})){
-      await navigator.share({ files:[file], title:subject, text:subject+"\n\n"+summary });
-      toast("Shared — pick your mail app; the PDF is attached. Confirm the recipients before sending.");
+    if(mobileLike && navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({ files:[file], title:subject, text:subject+"\n\n"+sendTo+"\n\n"+summary });
+      toast("Shared — pick your mail app; the PDF is attached. Copy the recipients from the top of the message.");
       return;
     }
   }catch(e){
