@@ -676,7 +676,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   <!-- ============ SUBMIT INFO ============ -->
   <section class="section">
     <h2>Submit &amp; send</h2>
-    <p class="hint">Use the bar at the bottom of the screen to submit, download, or manage your draft — no need to scroll here. <strong>Submit &amp; prepare email</strong> generates one combined PDF (report + receipts) and opens a pre-filled email; attach that single file before sending.</p>
+    <p class="hint">Use the bar at the bottom of the screen to submit, download, or manage your draft — no need to scroll here. <strong>Submit &amp; prepare email</strong> builds one combined PDF (report + receipts). On phones and supported browsers it opens your mail app with the PDF already attached; on other browsers it downloads the PDF and opens a pre-filled email for you to attach it.</p>
     <div class="note" id="processingNote"></div>
   </section>
 </main>
@@ -1436,19 +1436,38 @@ function triggerDownload(blob,filename){ const url=URL.createObjectURL(blob); co
 async function submit(){
   if(!validate()) return;
   const data=gather(); toast("Building your PDF…");
-  try{ const pdfBytes=await buildFullPdfBytes(data); triggerDownload(new Blob([pdfBytes],{type:"application/pdf"}), fileBase(data)+".pdf"); }
+  let pdfBytes;
+  try{ pdfBytes=await buildFullPdfBytes(data); }
   catch(e){ console.error(e); toast("Couldn't build the PDF.",true); return; }
+  const filename=fileBase(data)+".pdf";
+  const blob=new Blob([pdfBytes],{type:"application/pdf"});
   const t=totalsByCurrency(data.rows);
   const subject="Expense Report — "+data.header.name+" ("+data.header.from+" to "+data.header.to+") "+APP_VERSION;
-  const body=["Hi,","","Please find my expense report for approval and processing.","",
+  const recipients="To: "+data.header.empEmail+"\nCc: "+data.header.mgrEmail+", "+PROCESSING_EMAIL;
+  const summary=["Hi,","","Please find my expense report for approval and processing.","",
     "Employee: "+data.header.name,
     "Function: "+data.header.dept+(data.header.locCode?(" ("+data.header.locCode+")"):""),
     "Period: "+data.header.from+" to "+data.header.to,
     "Items: "+data.rows.length,
     "Total (CAD): $"+t.CAD.total.toFixed(2),"Total (USD): $"+t.USD.total.toFixed(2),
-    "Form version: "+APP_VERSION,"",
-    ">>> Please attach the downloaded PDF (report + receipts) before sending. <<<",
-    "","Thank you,",data.header.name].join("\n");
+    "Form version: "+APP_VERSION,"","Thank you,",data.header.name].join("\n");
+
+  // Preferred: hand the PDF to the OS share sheet so it arrives already attached (mobile + supported desktop).
+  try{
+    const file=new File([blob], filename, {type:"application/pdf"});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({ files:[file], title:subject, text:recipients+"\n\n"+summary });
+      toast("Shared — pick your mail app; the PDF is already attached. Add the recipients shown.");
+      return;
+    }
+  }catch(e){
+    if(e && e.name==="AbortError"){ toast("Share cancelled. Tap “Download PDF” if you still need the file."); return; }
+    console.warn("Web Share unavailable, falling back:",e);
+  }
+
+  // Fallback: download the PDF and open a pre-filled email (recipients/subject/body set; attach the file manually).
+  triggerDownload(blob, filename);
+  const body=summary+"\n\n>>> Please attach the downloaded PDF (report + receipts) before sending. <<<";
   const mailto="mailto:"+encodeURIComponent(data.header.empEmail)+"?cc="+encodeURIComponent(data.header.mgrEmail+","+PROCESSING_EMAIL)+"&subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
   setTimeout(()=>{ window.location.href=mailto; },700);
   toast("PDF downloaded — attach it to the email that just opened.");
