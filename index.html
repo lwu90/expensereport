@@ -483,6 +483,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     font-family:inherit;font-size:14px;color:var(--ink);border:1px solid var(--line-strong);border-radius:8px;
     padding:9px 11px;background:#fff;width:100%;min-width:0;max-width:100%;transition:border-color .12s, box-shadow .12s}
   textarea{resize:vertical;min-height:38px}
+  input.locked,input[readonly]{background:var(--green-soft);border-style:dashed;color:var(--ink);cursor:default}
   input:focus,select:focus,textarea:focus{outline:none;border-color:var(--green-mid);box-shadow:0 0 0 3px rgba(43,82,51,.14)}
   input.invalid,select.invalid,textarea.invalid{border-color:var(--danger);box-shadow:0 0 0 3px rgba(178,58,46,.12)}
   input[readonly]{background:var(--green-soft);color:var(--muted)}
@@ -568,8 +569,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     .action-sep{display:none}
     .totals-figs{gap:18px}
     .totals-actions{width:100%}
-    .totals-actions button{flex:1 1 auto}
+    .totals-actions button{flex:1 1 auto;min-height:46px}
     .mobile-only{display:inline-flex}
+    /* 16px keeps iOS Safari from auto-zooming (and shifting the layout) when a field gains focus */
+    input[type=text],input[type=email],input[type=date],input[type=number],select,textarea{font-size:16px}
+    button,.btn-secondary{min-height:44px}
   }
   @media (max-width:520px){
     .item-grid{grid-template-columns:1fr}
@@ -623,8 +627,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
 
       <div class="field full" id="locWrap" style="display:none">
         <label for="locCode">Three-digit location / department code <span class="req">*</span></label>
-        <input type="text" id="locCode" inputmode="numeric" maxlength="3" placeholder="e.g. 042" style="max-width:280px" />
-        <span class="err" data-err="locCode">Enter exactly 3 numeric digits (e.g. 042).</span>
+        <input type="text" id="locCode" inputmode="numeric" maxlength="3" placeholder="e.g. 118" style="max-width:280px" />
+        <span class="err" data-err="locCode">Enter exactly 3 numeric digits (e.g. 118).</span>
       </div>
 
       <div class="field full">
@@ -725,8 +729,31 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260615-1530";
+const APP_VERSION = "v20260616-0055";
 const DEPARTMENTS_NEEDING_LOCATION = ["Stores", "Partners and Other", "Head Office"];
+
+// Functions whose location/department code is a fixed dropdown (code is the option value; label shows "code - name").
+// Other location-needing functions (e.g. Stores) keep a free-text 3-digit field.
+const LOCATION_CODE_OPTIONS = {
+  "Partners and Other": [["865","Licensing"],["866","Wholesale"],["868","Roots Taiwan"],["888","China e-commerce"],["890","BTB"]],
+  "Head Office": [["902","Company General"],["903","Real Estate"],["904","Legal and Compliance"],["910","HO Logistics"],["911","Finance"],["912","Information Technology"],["913","Planning & Allocations"],["914","Loss Prevention"],["916","Human Resources"],["921","Marketing"],["924","Design"],["925","Technical Design"],["930","PD&S"],["931","Customer Experience"],["933","Buying & Merchandising"],["939","Materials Development"]]
+};
+
+// Functions with a single fixed overarching location code (used for PDF coding; shown read-only on the form).
+const FIXED_LOCATION_CODES = {
+  "Field Managers":"820", "Factory":"980", "Distribution Centre":"800", "eCommerce":"870"
+};
+
+// True when the location area should be visible for a function.
+function locFieldVisible(dept){ return DEPARTMENTS_NEEDING_LOCATION.includes(dept) || !!FIXED_LOCATION_CODES[dept]; }
+
+// The overarching location code that flows into PDF coding for the current function.
+function effectiveLocCode(){
+  const dept=$("empDept").value;
+  if(DEPARTMENTS_NEEDING_LOCATION.includes(dept)) return ($("locCode")?$("locCode").value:"").trim();
+  if(FIXED_LOCATION_CODES[dept]) return FIXED_LOCATION_CODES[dept];
+  return "";
+}
 
 const GL_CODES = {
   "Distribution Centre": [["53113","Travel"],["53112","Meals & Entertainment"],["53110","General Supplies"],["53117","Cell Phones"]],
@@ -741,6 +768,20 @@ function glListFor(dept){ return GL_CODES[dept] || GL_CODES["Head Office"]; }
 function travelGlFor(dept){ const e=glListFor(dept).find(x=>x[1]==="Travel"); return e?e[0]:""; }
 
 const PROVINCES = ["Alberta","British Columbia","Manitoba","New Brunswick","Newfoundland and Labrador","Northwest Territories","Nova Scotia","Nunavut","Ontario","Prince Edward Island","Quebec","Saskatchewan","Yukon","USA","Abroad"];
+
+// Functions that are Ontario-based: their province dropdown lists Ontario first and defaults to it.
+const ONTARIO_DEFAULT_FUNCTIONS = ["Head Office","Distribution Centre","eCommerce","Partners and Other"];
+
+// Build the province <option> list. For Ontario-default functions, Ontario is moved to the top
+// and pre-selected (unless an explicit selection is passed in to preserve a prior choice).
+function buildProvinceOptions(dept, selected){
+  const ontarioFirst = ONTARIO_DEFAULT_FUNCTIONS.includes(dept);
+  const list = ontarioFirst ? ["Ontario"].concat(PROVINCES.filter(p=>p!=="Ontario")) : PROVINCES.slice();
+  const sel = (selected!=null && selected!=="") ? selected : (ontarioFirst ? "Ontario" : "");
+  return ['<option value="">Select\u2026</option>']
+    .concat(list.map(p=>`<option${p===sel?" selected":""}>${escapeHtml(p)}</option>`))
+    .join("");
+}
 
 // Combined statutory sales-tax rates (GST/HST/PST/QST) used only for a high-level, non-blocking sanity check.
 // Adjust here if a rate changes. USA / Abroad have no implied Canadian rate, so they're not checked.
@@ -861,7 +902,7 @@ function itemTemplate(internalId){
         <!-- INVOICE FIELDS -->
         <div class="field span2" data-mode="invoice">
           <label>Province / region incurred <span class="req">*</span></label>
-          <select data-f="province"><option value="">Select…</option>${PROVINCES.map(p=>`<option>${escapeHtml(p)}</option>`).join("")}</select>
+          <select data-f="province">${buildProvinceOptions(dept)}</select>
           <span class="err" data-itemerr="province">Select where it was incurred.</span>
         </div>
         <div class="field span2" data-mode="invoice">
@@ -919,6 +960,12 @@ function itemTemplate(internalId){
         </div>
         <div class="field span2" data-mode="mileage"></div>
 
+        <div class="field span2">
+          <label>Department code override</label>
+          <input type="text" inputmode="numeric" maxlength="3" data-f="locoverride" placeholder="e.g. 902" />
+          <span class="helper">Can leave blank if the same as your location/department.</span>
+          <span class="err" data-itemerr="locoverride">Enter exactly 3 numeric digits, or leave blank.</span>
+        </div>
         <div class="field span2">
           <label>Special Project Code</label>
           <input type="text" inputmode="numeric" maxlength="2" data-f="project" placeholder="e.g. 05" />
@@ -1096,11 +1143,12 @@ function readItem(node){
   const type=g("type").value;
   const description=g("description").value.trim();
   const project=(g("project").value||"").trim();
+  const locOverride=(g("locoverride").value||"").trim();
   const date=g("itemdate").value;
   if(type==="mileage"){
     const distance=parseFloat(g("distance").value)||0;
     const amount=+(distance*MILEAGE_RATE).toFixed(2);
-    return {type, date, description, project, fromAddr:g("fromaddr").value.trim(), toAddr:g("toaddr").value.trim(), distance,
+    return {type, date, description, project, locOverride, fromAddr:g("fromaddr").value.trim(), toAddr:g("toaddr").value.trim(), distance,
       province:"", currency:"CAD", amount, tax:0, total:amount, glVal:"", glCode:travelGlFor($("empDept").value), glLabel:"Travel (mileage)"};
   }
   const amount=parseFloat(g("amount").value)||0;
@@ -1110,7 +1158,7 @@ function readItem(node){
   let glCode="",glLabel="";
   if(glVal===OTHER_GL){ glCode=(g("glcustom").value||"").trim(); glLabel="Other (custom)"; }
   else if(glVal){ const [code,idx]=glVal.split("||"); glCode=code; const e=glListFor($("empDept").value)[Number(idx)]; glLabel=e?e[1]:""; }
-  return {type, date, description, project, province:g("province").value, currency, amount, tax, total:amount+tax, glVal, glCode, glLabel, fromAddr:"", toAddr:"", distance:0};
+  return {type, date, description, project, locOverride, province:g("province").value, currency, amount, tax, total:amount+tax, glVal, glCode, glLabel, fromAddr:"", toAddr:"", distance:0};
 }
 
 function checkTaxWarning(node){
@@ -1146,10 +1194,60 @@ function recalc(){
 /* ============================================================
    DEPARTMENT -> LOCATION FIELD
    ============================================================ */
+function rebuildAllProvinces(){
+  const dept=$("empDept").value;
+  const ontarioFirst=ONTARIO_DEFAULT_FUNCTIONS.includes(dept);
+  [...$("items").children].forEach(node=>{
+    const sel=node.querySelector('[data-f="province"]');
+    if(!sel) return;
+    const prev=sel.value;
+    const keep = prev ? prev : (ontarioFirst ? "Ontario" : "");
+    sel.innerHTML=buildProvinceOptions(dept, keep);
+    sel.value=keep;
+  });
+}
+
+// Rebuild the header location/department control to match the function: a dropdown for functions
+// with fixed code lists, a 3-digit text box otherwise. Keeps id="locCode" so all readers still work.
+function renderLocField(dept, value){
+  const wrap=$("locWrap"); if(!wrap) return;
+  value = (value!=null) ? String(value) : "";
+  const opts = LOCATION_CODE_OPTIONS[dept];
+  const fixed = FIXED_LOCATION_CODES[dept];
+  let labelText, errText, control;
+  if(opts){
+    labelText = "Location / department";
+    errText = "Select a location / department.";
+    control = '<select id="locCode" style="max-width:340px"><option value="">Select\u2026</option>'
+      + opts.map(([code,name])=>`<option value="${escapeHtml(code)}"${code===value?" selected":""}>${escapeHtml(code+" - "+name)}</option>`).join("")
+      + '</select>';
+  } else if(fixed){
+    labelText = "Location / department code (set automatically)";
+    errText = "";
+    control = `<input type="text" id="locCode" readonly value="${escapeHtml(fixed)}" class="locked" style="max-width:280px" />`;
+  } else {
+    labelText = "Three-digit location / department code";
+    errText = "Enter exactly 3 numeric digits (e.g. 118).";
+    control = `<input type="text" id="locCode" inputmode="numeric" maxlength="3" placeholder="e.g. 118" style="max-width:280px" value="${escapeHtml(value)}" />`;
+  }
+  const reqMark = fixed ? "" : ' <span class="req">*</span>';
+  wrap.innerHTML = '<label for="locCode">'+labelText+reqMark+'</label>'+control
+    + (errText?('<span class="err" data-err="locCode">'+errText+'</span>'):'');
+  wireLocControl();
+}
+function wireLocControl(){
+  const el=$("locCode"); if(!el) return;
+  const clear=()=>{ el.classList.remove("invalid"); document.querySelectorAll('[data-err="locCode"]').forEach(e=>e.classList.remove("show")); };
+  el.addEventListener("input",autosave); el.addEventListener("change",autosave);
+  el.addEventListener("input",clear); el.addEventListener("change",clear);
+}
+
 $("empDept").addEventListener("change",()=>{
   const dept=$("empDept").value;
-  $("locWrap").style.display=DEPARTMENTS_NEEDING_LOCATION.includes(dept)?"flex":"none";
+  renderLocField(dept, "");
+  $("locWrap").style.display=locFieldVisible(dept)?"flex":"none";
   rebuildAllGl();
+  rebuildAllProvinces();
   $("empDept").classList.remove("invalid"); const e=document.querySelector('[data-err="empDept"]'); if(e)e.classList.remove("show");
 });
 
@@ -1200,6 +1298,8 @@ function validate(){
     }
     const proj=(g("project").value||"").trim();
     if(proj && !/^\d{2}$/.test(proj)){ rowOk=false; fail(g("project"),"project"); }
+    const lo=(g("locoverride").value||"").trim();
+    if(lo && !/^\d{3}$/.test(lo)){ rowOk=false; fail(g("locoverride"),"locoverride"); }
     if(!g("itemdate").value){ rowOk=false; fail(g("itemdate"),"itemdate"); }
     if(rowOk) anyValid=true;
   });
@@ -1215,7 +1315,7 @@ function validate(){
 function gather(){
   const header={
     name:$("empName").value.trim(), dept:$("empDept").value,
-    locCode:DEPARTMENTS_NEEDING_LOCATION.includes($("empDept").value)?$("locCode").value.trim():"",
+    locCode:effectiveLocCode(),
     from:$("dateFrom").value, to:$("dateTo").value,
     empEmail:$("empEmail").value.trim(), mgrEmail:$("mgrEmail").value.trim(),
   };
@@ -1251,8 +1351,9 @@ function fileBase(data){
 }
 
 function glDisplay(r, locCode){
+  const loc = (r.locOverride && r.locOverride.trim()) ? r.locOverride.trim() : locCode;
   const parts=[r.glCode];
-  if(locCode) parts.push(locCode);
+  if(loc) parts.push(loc);
   if(r.project) parts.push(r.project);
   return parts.filter(Boolean).join("-");
 }
@@ -1481,6 +1582,7 @@ async function submit(){
 function clearForm(){
   ["empName","locCode","dateFrom","dateTo","empEmail","mgrEmail"].forEach(id=>$(id).value="");
   $("empDept").value="";
+  renderLocField("","");
   $("locWrap").style.display="none";
   for(const k in itemFiles) delete itemFiles[k];
   $("items").innerHTML=""; nextSeq=0;
@@ -1506,7 +1608,7 @@ async function saveDraftToFile(){
   for(const node of $("items").children){
     const g=sel=>node.querySelector('[data-f="'+sel+'"]'); const iid=Number(node.dataset.iid);
     const files=[]; for(const f of (itemFiles[iid]||[])) files.push({name:f.name,dataURL:await fileToDataURL(f)});
-    draft.items.push({type:g("type").value,description:g("description").value,province:g("province").value,currency:g("currency").value,amount:g("amount").value,tax:g("tax").value,gl:g("gl").value,glcustom:g("glcustom").value,fromaddr:g("fromaddr").value,toaddr:g("toaddr").value,distance:g("distance").value,project:g("project").value,date:g("itemdate").value,files});
+    draft.items.push({type:g("type").value,description:g("description").value,province:g("province").value,currency:g("currency").value,amount:g("amount").value,tax:g("tax").value,gl:g("gl").value,glcustom:g("glcustom").value,fromaddr:g("fromaddr").value,toaddr:g("toaddr").value,distance:g("distance").value,project:g("project").value,locoverride:g("locoverride").value,date:g("itemdate").value,files});
   }
   triggerDownload(new Blob([JSON.stringify(draft)],{type:"application/json"}),(fileBase(gather())||"ExpenseReport_draft")+".draft.json");
   $("saveState").textContent="Saved "+new Date().toLocaleTimeString();
@@ -1515,9 +1617,10 @@ async function saveDraftToFile(){
 function loadDraftFromFile(file){ const r=new FileReader(); r.onload=()=>{ let d; try{ d=JSON.parse(r.result); }catch(e){ toast("That file isn't a valid draft.",true); return; } applyDraft(d); toast("Draft loaded."); }; r.readAsText(file); }
 function applyDraft(draft){
   const h=draft.header||{};
-  $("empName").value=h.name||""; $("empDept").value=h.dept||""; $("locCode").value=h.locCode||"";
+  $("empName").value=h.name||""; $("empDept").value=h.dept||"";
   $("dateFrom").value=h.from||""; $("dateTo").value=h.to||""; $("empEmail").value=h.empEmail||""; $("mgrEmail").value=h.mgrEmail||"";
-  $("locWrap").style.display=DEPARTMENTS_NEEDING_LOCATION.includes(h.dept)?"flex":"none";
+  renderLocField(h.dept, h.locCode||"");
+  $("locWrap").style.display=locFieldVisible(h.dept)?"flex":"none";
   $("items").innerHTML=""; nextSeq=0; for(const k in itemFiles) delete itemFiles[k];
   const items=(draft.items&&draft.items.length)?draft.items:[{},{},{}];
   items.forEach(it=>{
@@ -1528,7 +1631,7 @@ function applyDraft(draft){
     g("currency").value=it.currency||"CAD"; g("amount").value=it.amount||""; g("tax").value=it.tax||"";
     g("gl").innerHTML=buildGlOptions(h.dept); if(it.gl){ g("gl").value=it.gl; }
     g("glcustom").value=it.glcustom||"";
-    g("fromaddr").value=it.fromaddr||""; g("toaddr").value=it.toaddr||""; g("distance").value=it.distance||""; g("project").value=it.project||""; g("itemdate").value=it.date||"";
+    g("fromaddr").value=it.fromaddr||""; g("toaddr").value=it.toaddr||""; g("distance").value=it.distance||""; g("project").value=it.project||""; g("locoverride").value=it.locoverride||""; g("itemdate").value=it.date||"";
     (it.files||[]).forEach(fo=>{ try{ itemFiles[id].push(dataURLtoFile(fo.dataURL,fo.name)); }catch(e){} });
     applyTypeUI(node); renderFiles(id);
   });
@@ -1542,8 +1645,9 @@ function autosave(){
 }
 function restoreAutosave(){
   try{ const raw=localStorage.getItem("rootsExpenseAutosave"); if(!raw)return; const h=JSON.parse(raw); if(!h.name&&!h.empEmail)return;
-    $("empName").value=h.name||""; $("empDept").value=h.dept||""; $("locCode").value=h.locCode||""; $("dateFrom").value=h.from||""; $("dateTo").value=h.to||""; $("empEmail").value=h.empEmail||""; $("mgrEmail").value=h.mgrEmail||"";
-    $("locWrap").style.display=DEPARTMENTS_NEEDING_LOCATION.includes(h.dept)?"flex":"none";
+    $("empName").value=h.name||""; $("empDept").value=h.dept||""; $("dateFrom").value=h.from||""; $("dateTo").value=h.to||""; $("empEmail").value=h.empEmail||""; $("mgrEmail").value=h.mgrEmail||"";
+    renderLocField(h.dept, h.locCode||"");
+    $("locWrap").style.display=locFieldVisible(h.dept)?"flex":"none";
     $("saveState").textContent="Restored auto-saved fields"; }catch(e){}
 }
 
@@ -1561,12 +1665,13 @@ $("saveDraftBtn").addEventListener("click",saveDraftToFile);
 $("loadDraftBtn").addEventListener("click",()=>$("draftFileInput").click());
 $("draftFileInput").addEventListener("change",e=>{ if(e.target.files[0]) loadDraftFromFile(e.target.files[0]); e.target.value=""; });
 
-["empName","empDept","locCode","dateFrom","dateTo","empEmail","mgrEmail"].forEach(id=>{ $(id).addEventListener("input",autosave); $(id).addEventListener("change",autosave); });
-document.querySelectorAll("#empName,#empDept,#locCode,#dateFrom,#dateTo,#empEmail,#mgrEmail").forEach(el=>{
+["empName","empDept","dateFrom","dateTo","empEmail","mgrEmail"].forEach(id=>{ $(id).addEventListener("input",autosave); $(id).addEventListener("change",autosave); });
+document.querySelectorAll("#empName,#empDept,#dateFrom,#dateTo,#empEmail,#mgrEmail").forEach(el=>{
   el.addEventListener("input",()=>{ el.classList.remove("invalid"); document.querySelectorAll('[data-err="'+el.id+'"]').forEach(e=>e.classList.remove("show")); if(el.id==="dateFrom"||el.id==="dateTo"){ const o=document.querySelector('[data-err="dateOrder"]'); if(o)o.classList.remove("show"); } });
 });
 
 restoreAutosave();
+renderLocField($("empDept").value, $("locCode")?$("locCode").value:"");
 rebuildAllGl();
 addItem(); addItem(); addItem();
 recalc();
