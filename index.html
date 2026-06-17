@@ -735,7 +735,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260616-0200";
+const APP_VERSION = "v20260617-1330";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -1087,19 +1087,21 @@ async function aiScan(node,id){
   if(!AI_ENABLED) return;
   const status=node.querySelector("[data-aistatus]");
   const setStatus=(t,err)=>{ if(status){ status.textContent=t; status.style.color=err?"var(--danger)":"var(--muted)"; } };
-  const img=(itemFiles[id]||[]).find(f=>/^image\//.test(f.type||""));
-  if(!img){ setStatus("Attach a receipt photo (image) first \u2014 PDFs aren't scanned in the pilot.",true); return; }
+  const files=itemFiles[id]||[];
+  const file=files.find(f=>/^image\//.test(f.type||"")) || files.find(f=>/pdf/i.test(f.type||"")||/\.pdf$/i.test(f.name||""));
+  if(!file){ setStatus("Attach a receipt image or PDF first.",true); return; }
+  const mime=file.type || (/\.pdf$/i.test(file.name||"")?"application/pdf":"application/octet-stream");
   const btn=node.querySelector("[data-aiscan]"); if(btn) btn.disabled=true;
   setStatus("Analyzing receipt\u2026");
   try{
-    const b64=await fileToBase64(img);
+    const b64=await fileToBase64(file);
     const dept=$("empDept").value;
     const glOptions=(typeof glListFor==="function"?glListFor(dept):[]).map(e=>({code:e[0],label:e[1]}));
     const headers={"Content-Type":"application/json"};
     if(AI_APP_TOKEN) headers["X-App-Token"]=AI_APP_TOKEN;
-    const resp=await fetch(AI_PROXY_URL,{method:"POST",headers,body:JSON.stringify({imageBase64:b64,mimeType:img.type,glOptions})});
+    const resp=await fetch(AI_PROXY_URL,{method:"POST",headers,body:JSON.stringify({imageBase64:b64,mimeType:mime,glOptions})});
     const out=await resp.json().catch(()=>null);
-    if(!resp.ok||!out||!out.ok||!out.data){ setStatus("Couldn't read that receipt"+(out&&out.error?(": "+out.error):"")+". You can fill it in manually.",true); return; }
+    if(!resp.ok||!out||!out.ok||!out.data){ console.warn("AI scan response:",resp.status,out); setStatus("Couldn't read that receipt"+(out&&out.error?(": "+out.error):"")+". You can fill it in manually.",true); return; }
     const filled=applyAiSuggestions(node,out.data);
     const desc=node.querySelector('[data-f="description"]'); if(desc){ desc.style.height="auto"; desc.style.height=desc.scrollHeight+"px"; }
     recalc();
