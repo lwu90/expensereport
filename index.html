@@ -595,7 +595,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     <div>
       <p class="brandmark">Roots &middot; Finance</p>
       <h1>Expense Report Submission</h1>
-      <p class="sub">Enter your expense details below. When you submit, the tool builds a combined PDF — your report plus all receipts — then prepares the email to you, your manager, and accounts payable.</p>
+      <p class="sub">Enter your expense details below. When you submit, the tool builds a combined PDF — your report plus all receipts — then prepares the email to you and your manager.</p>
     </div>
     <div style="text-align:right;min-width:160px">
       <div class="version" id="appVersion"></div>
@@ -671,8 +671,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   <!-- ============ SUBMIT INFO ============ -->
   <section class="section">
     <h2>Submit &amp; send</h2>
-    <p class="hint">Use the bar at the bottom of the screen to submit, download, or manage your draft — no need to scroll here. <strong>Submit &amp; prepare email</strong> builds one combined PDF (report + receipts). On phones and tablets it opens your mail app with the PDF already attached; on computers it downloads the PDF and opens a pre-filled email (subject and recipients set) for you to attach the file.</p>
-    <div class="note" id="processingNote"></div>
+    <p class="hint">Use the bar at the bottom of the screen to submit, download, or manage your draft — no need to scroll here. <strong>Prepare to Submit</strong> builds one combined PDF (report + receipts) and a pre-filled email to your manager for approval. On a computer it downloads the PDF so you can attach it to that email; on a phone it lets you pick your mail app to send it with the PDF attached. Your manager forwards it to Accounts Payable once approved.</p>
+    <div class="note" id="processingNote" style="display:none"></div>
   </section>
 </main>
 
@@ -688,6 +688,17 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   </div>
 </div>
 
+<div class="modal-overlay" id="remindModal">
+  <div class="modal">
+    <p class="modal-title">One more step</p>
+    <p class="modal-text" id="remindText"></p>
+    <div class="modal-actions">
+      <button type="button" class="btn-secondary" id="remindCancel">Cancel</button>
+      <button type="button" class="btn-primary" id="remindOk">Continue</button>
+    </div>
+  </div>
+</div>
+
 <!-- ============ STICKY TOTALS BAR ============ -->
 <div class="totalsbar">
   <div class="wrap">
@@ -697,8 +708,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
       <div class="tfig"><div class="k">Items</div><div class="v" id="itemCount">0</div></div>
     </div>
     <div class="totals-actions">
-      <button type="button" class="btn-primary" id="submitBtn">Submit &amp; prepare email</button>
-      <button type="button" class="btn-secondary" id="pdfBtn">Download PDF</button>
+      <button type="button" class="btn-primary" id="submitBtn">Prepare to Submit</button>
+      <button type="button" class="btn-secondary" id="pdfBtn">Download Draft</button>
       <span class="action-sep"></span>
       <button type="button" class="btn-secondary" id="loadDraftBtn">Load draft</button>
       <button type="button" class="btn-secondary" id="saveDraftBtn">Save draft</button>
@@ -719,7 +730,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260617-1530";
+const APP_VERSION = "v20260617-1800";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -800,8 +811,6 @@ let nextSeq = 0;
 const itemFiles = {};
 
 (function(){
-  var pn=document.getElementById("processingNote");
-  if(pn) pn.innerHTML="A processing copy is sent to <strong>"+escapeHtml(PROCESSING_EMAIL)+"</strong>, with your manager cc'd for approval.";
   var av=document.getElementById("appVersion");
   if(av) av.textContent="Form "+APP_VERSION;
 })();
@@ -887,10 +896,20 @@ function itemTemplate(internalId){
           <label>Expense type <span class="req">*</span></label>
           <select data-f="type"><option value="invoice">Invoice</option><option value="mileage">Mileage</option></select>
         </div>
-        <div class="field span2">
-          <label data-datelabel>Expense date <span class="req">*</span></label>
-          <input type="date" data-f="itemdate" />
-          <span class="err" data-itemerr="itemdate">Select the date.</span>
+        <div class="files" data-mode="invoice">
+          <div class="files-head">
+            <span class="t">Backup / receipts</span>
+            <span style="font-size:12px;color:var(--muted)" data-filecount>0 / ${MAX_FILES_PER_ITEM} &middot; 20 MB max each</span>
+          </div>
+          <input type="file" data-fileinput multiple class="hidden" />
+          <input type="file" data-camerainput accept="image/*" capture="environment" class="hidden" />
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button type="button" class="btn-secondary" data-fileadd style="padding:9px 16px">Upload receipt</button>
+            <button type="button" class="btn-secondary mobile-only" data-cameraadd style="padding:9px 16px">Take photo</button>
+            ${AI_ENABLED ? '<button type="button" class="btn-secondary" data-aiscan style="padding:9px 16px">\u2728 Scan receipt with AI</button>' : ''}
+          </div>
+          ${AI_ENABLED ? '<div class="helper" data-aistatus style="margin-top:6px"></div>' : ''}
+          <div class="filelist" data-filelist></div>
         </div>
 
         <div class="field wide">
@@ -918,16 +937,6 @@ function itemTemplate(internalId){
           <label>Sales Tax</label>
           <input type="number" step="0.01" min="0" inputmode="decimal" data-f="tax" placeholder="0.00" />
           <span class="taxwarn" data-taxwarn></span>
-        </div>
-        <div class="field span2" data-mode="invoice">
-          <label>GL code <span class="req">*</span></label>
-          <select data-f="gl">${buildGlOptions(dept)}</select>
-          <span class="err" data-itemerr="gl">Select a GL code.</span>
-        </div>
-        <div class="field span2" data-mode="invoice" data-glcustomwrap style="display:none">
-          <label>Five-digit GL code <span class="req">*</span></label>
-          <input type="text" inputmode="numeric" maxlength="5" data-f="glcustom" placeholder="e.g. 70999" />
-          <span class="err" data-itemerr="glcustom">Enter exactly 5 numeric digits.</span>
         </div>
 
         <!-- MILEAGE FIELDS -->
@@ -961,6 +970,21 @@ function itemTemplate(internalId){
         <div class="field span2" data-mode="mileage"></div>
 
         <div class="field span2">
+          <label data-datelabel>Expense date <span class="req">*</span></label>
+          <input type="date" data-f="itemdate" />
+          <span class="err" data-itemerr="itemdate">Select the date.</span>
+        </div>
+        <div class="field span2" data-mode="invoice">
+          <label>GL code <span class="req">*</span></label>
+          <select data-f="gl">${buildGlOptions(dept)}</select>
+          <span class="err" data-itemerr="gl">Select a GL code.</span>
+        </div>
+        <div class="field span2" data-mode="invoice" data-glcustomwrap style="display:none">
+          <label>Five-digit GL code <span class="req">*</span></label>
+          <input type="text" inputmode="numeric" maxlength="5" data-f="glcustom" placeholder="e.g. 70999" />
+          <span class="err" data-itemerr="glcustom">Enter exactly 5 numeric digits.</span>
+        </div>
+        <div class="field span2">
           <label>Department code override</label>
           <input type="text" inputmode="numeric" maxlength="3" data-f="locoverride" placeholder="e.g. 902" />
           <span class="helper">Can leave blank if the same as your location/department.</span>
@@ -972,28 +996,12 @@ function itemTemplate(internalId){
           <span class="helper" data-projecthelp>Leave blank unless discussed with finance.</span>
           <span class="err" data-itemerr="project">Enter exactly 2 numeric digits, or leave blank.</span>
         </div>
-        <div class="field span2"></div>
 
         <div class="calc-row">
           <span class="lbl">Item Total</span>
           <span class="val" data-itemtotal>CAD $0.00</span>
         </div>
 
-        <div class="files" data-mode="invoice">
-          <div class="files-head">
-            <span class="t">Backup / receipts</span>
-            <span style="font-size:12px;color:var(--muted)" data-filecount>0 / ${MAX_FILES_PER_ITEM} &middot; 20 MB max each</span>
-          </div>
-          <input type="file" data-fileinput multiple class="hidden" />
-          <input type="file" data-camerainput accept="image/*" capture="environment" class="hidden" />
-          <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <button type="button" class="btn-secondary" data-fileadd style="padding:9px 16px">Upload receipt</button>
-            <button type="button" class="btn-secondary mobile-only" data-cameraadd style="padding:9px 16px">Take photo</button>
-            ${AI_ENABLED ? '<button type="button" class="btn-secondary" data-aiscan style="padding:9px 16px">\u2728 Scan receipt with AI</button>' : ''}
-          </div>
-          ${AI_ENABLED ? '<div class="helper" data-aistatus style="margin-top:6px"></div>' : ''}
-          <div class="filelist" data-filelist></div>
-        </div>
       </div>
     </div>
   </div>`;
@@ -1425,7 +1433,7 @@ function glDisplay(r, locCode){
   return parts.filter(Boolean).join("-");
 }
 
-function buildPdf(data){
+function buildPdf(data, linkBoxes){
   const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:"pt",format:"a4",orientation:"landscape"});
   const {header,rows}=data; const t=totalsByCurrency(rows); const M=40;
   const pw=doc.internal.pageSize.getWidth();
@@ -1449,6 +1457,22 @@ function buildPdf(data){
       9:{cellWidth:64,halign:"right"}, 10:{cellWidth:54}
     },
     theme:"striped",
+    didDrawCell:(dc)=>{
+      // Record the screen position of each file reference token (e.g. 1A) so we can hyperlink it later.
+      if(!linkBoxes || dc.section!=="body" || dc.column.index!==10) return;
+      const raw=dc.cell.raw;
+      if(!raw || raw==="—") return;
+      try{
+        dc.doc.setFont("helvetica","normal"); dc.doc.setFontSize(8);
+        const sepW=dc.doc.getTextWidth(", ");
+        let x=dc.cell.x+3.5; const yTop=dc.cell.y+3.5;
+        String(raw).split(", ").forEach(tok=>{
+          const w=dc.doc.getTextWidth(tok);
+          linkBoxes.push({page:dc.pageNumber, tag:tok, x, yTop, w, h:9.5});
+          x+=w+sepW;
+        });
+      }catch(e){}
+    },
   });
   let fy=doc.lastAutoTable.finalY+18; doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(24,48,40);
   doc.text("Total Amount (CAD): $"+t.CAD.total.toFixed(2),M,fy); fy+=16;
@@ -1542,19 +1566,48 @@ function imageFileToJpegBytes(file){
 // Summary PDF (jsPDF) + each attachment on following pages, labelled (2A, 2B…). Returns Uint8Array.
 async function buildFullPdfBytes(data){
   if(!window.jspdf) throw new Error("jsPDF not loaded");
-  const summaryBytes=buildPdf(data).output("arraybuffer");
+  const linkBoxes=[];
+  const summaryBytes=buildPdf(data, linkBoxes).output("arraybuffer");
   if(!window.PDFLib) return new Uint8Array(summaryBytes); // graceful: summary only if pdf-lib missing
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
   const merged=await PDFDocument.load(summaryBytes);
   const bold=await merged.embedFont(StandardFonts.HelveticaBold);
   const reg=await merged.embedFont(StandardFonts.Helvetica);
   const PAGE_W=595.28, PAGE_H=841.89, M=40, HB=32, green=rgb(24/255,48/255,40/255);
+  const tagToPage={}; // file reference -> 0-based page index in the merged PDF
+
+  // Add an internal (page-to-page) link annotation. Defensive: failure just means no link.
+  function addInternalLink(srcPage, rect, targetPage){
+    try{
+      const { PDFName, PDFArray, PDFDict, PDFNumber } = PDFLib;
+      const ctx=merged.context;
+      const dest=PDFArray.withContext(ctx); dest.push(targetPage.ref); dest.push(PDFName.of("Fit"));
+      const annot=PDFDict.withContext(ctx);
+      annot.set(PDFName.of("Type"), PDFName.of("Annot"));
+      annot.set(PDFName.of("Subtype"), PDFName.of("Link"));
+      const rectArr=PDFArray.withContext(ctx); rect.forEach(n=>rectArr.push(PDFNumber.of(n)));
+      annot.set(PDFName.of("Rect"), rectArr);
+      const border=PDFArray.withContext(ctx); [0,0,0].forEach(n=>border.push(PDFNumber.of(n)));
+      annot.set(PDFName.of("Border"), border);
+      annot.set(PDFName.of("Dest"), dest);
+      const ref=ctx.register(annot);
+      let annots=srcPage.node.lookup(PDFName.of("Annots"));
+      if(annots && typeof annots.push==="function"){ annots.push(ref); }
+      else { const a=PDFArray.withContext(ctx); a.push(ref); srcPage.node.set(PDFName.of("Annots"), a); }
+    }catch(e){ console.warn("link add failed",e); }
+  }
 
   function header(page,label,sub){
     const {width,height}=page.getSize();
     page.drawRectangle({x:0,y:height-HB,width:width,height:HB,color:green});
     page.drawText(label,{x:M,y:height-21,size:13,font:bold,color:rgb(1,1,1)});
-    if(sub) page.drawText(truncate(sub,72),{x:M+52,y:height-20,size:9,font:reg,color:rgb(0.78,0.85,0.80)});
+    if(sub) page.drawText(truncate(sub,60),{x:M+52,y:height-20,size:9,font:reg,color:rgb(0.78,0.85,0.80)});
+    // "Back to Cover Page" link in the header bar (top-right) -> first page.
+    try{
+      const bt="Back to Cover Page", tw=reg.widthOfTextAtSize(bt,9);
+      page.drawText(bt,{x:width-M-tw,y:height-20,size:9,font:reg,color:rgb(0.82,0.90,0.85)});
+      addInternalLink(page,[width-M-tw-2,height-HB+3,width-M+2,height-3],merged.getPage(0));
+    }catch(e){}
   }
 
   for(const r of data.rows){
@@ -1566,6 +1619,7 @@ async function buildFullPdfBytes(data){
       if(isImageFile(f)){
         try{
           const png=await merged.embedJpg(await imageFileToJpegBytes(f));
+          tagToPage[label]=merged.getPageCount();
           const page=merged.addPage([PAGE_W,PAGE_H]);
           header(page,label,sub);
           const aw=PAGE_W-2*M, ah=PAGE_H-HB-2*M;
@@ -1578,11 +1632,13 @@ async function buildFullPdfBytes(data){
         try{
           const src=await PDFDocument.load(await f.arrayBuffer(),{ignoreEncryption:true});
           const copied=await merged.copyPages(src, src.getPageIndices());
+          tagToPage[label]=merged.getPageCount();
           copied.forEach((p,idx)=>{ merged.addPage(p); header(p, label+(copied.length>1?(" ("+(idx+1)+"/"+copied.length+")"):""), sub); });
           handled=true;
         }catch(e){ console.warn("pdf merge failed",label,e); }
       }
       if(!handled){
+        tagToPage[label]=merged.getPageCount();
         const page=merged.addPage([PAGE_W,PAGE_H]);
         header(page,label,sub);
         page.drawText("This attachment can't be rendered in the PDF.",{x:M,y:PAGE_H-HB-56,size:12,font:reg,color:rgb(0.1,0.1,0.1)});
@@ -1590,6 +1646,18 @@ async function buildFullPdfBytes(data){
       }
     }
   }
+
+  // Hyperlink each file reference in the detail table to its receipt page.
+  linkBoxes.forEach(b=>{
+    const tgt=tagToPage[b.tag];
+    if(tgt==null) return;
+    const srcIdx=b.page-1;
+    if(srcIdx<0 || srcIdx>=merged.getPageCount() || tgt>=merged.getPageCount()) return;
+    const srcPage=merged.getPage(srcIdx), targetPage=merged.getPage(tgt);
+    const H=srcPage.getSize().height;
+    addInternalLink(srcPage, [b.x-1, H-(b.yTop+b.h), b.x+b.w+1, H-b.yTop+1], targetPage);
+  });
+
   return await merged.save();
 }
 
@@ -1602,6 +1670,9 @@ async function downloadPdf(){
 
 function triggerDownload(blob,filename){ const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{document.body.removeChild(a); URL.revokeObjectURL(url);},1500); }
 
+let _remindCb=null;
+function showReminder(text, cb){ _remindCb=cb; $("remindText").textContent=text; $("remindModal").classList.add("show"); }
+
 async function submit(){
   if(!validate()) return;
   const data=gather(); toast("Building your PDF…");
@@ -1610,10 +1681,20 @@ async function submit(){
   catch(e){ console.error(e); toast("Couldn't build the PDF.",true); return; }
   const filename=fileBase(data)+".pdf";
   const blob=new Blob([pdfBytes],{type:"application/pdf"});
+  const mobileLike = window.matchMedia && window.matchMedia("(pointer:coarse) and (hover:none)").matches;
+  const reminder = mobileLike
+    ? "Please select your email application to submit the assembled expense report PDF."
+    : "Please download the assembled expense report PDF and attach it to the prepared email.";
+  // Show the reminder first; the actual send runs on Continue so the share stays inside a fresh user gesture (mobile).
+  showReminder(reminder, ()=>finishSubmit(data, blob, filename, mobileLike, reminder));
+}
+
+function finishSubmit(data, blob, filename, mobileLike, reminder){
   const t=totalsByCurrency(data.rows);
   const subject=data.header.name+"'s Expense Report";
-  const sendTo="Send to: "+data.header.empEmail+"; "+data.header.mgrEmail+"; "+PROCESSING_EMAIL;
-  const summary=["Hi,","","Please find my expense report for approval and processing.","",
+  const sendTo="Send to (manager): "+data.header.mgrEmail;
+  const summary=["Hi,","",
+    "Please find my expense report for approval and processing. Once approved, please forward to "+PROCESSING_EMAIL+" and note it is approved.","",
     "Employee: "+data.header.name,
     "Function: "+data.header.dept+(data.header.locCode?(" ("+data.header.locCode+")"):""),
     "Period: "+periodText(data.header),
@@ -1621,30 +1702,29 @@ async function submit(){
     "Total (CAD): $"+t.CAD.total.toFixed(2),"Total (USD): $"+t.USD.total.toFixed(2),"",
     "Thank you,",data.header.name].join("\n");
 
-  // Preferred ON PHONES/TABLETS only: hand the PDF to the OS share sheet so it arrives already attached.
-  // Desktop share targets (e.g. Windows -> Outlook) drop the subject and attach an empty .tmp, so we
-  // restrict this to mobile-like devices (touch primary, no hover) and let desktops use the reliable path below.
-  // The shared text leads with the subject, then the recipients (so they're visible/copyable without scrolling).
-  const mobileLike = window.matchMedia && window.matchMedia("(pointer:coarse) and (hover:none)").matches;
-  try{
-    const file=new File([blob], filename, {type:"application/pdf"});
-    if(mobileLike && navigator.canShare && navigator.canShare({files:[file]})){
-      await navigator.share({ files:[file], title:subject, text:subject+"\n\n"+sendTo+"\n\n"+summary });
-      toast("Shared — pick your mail app; the PDF is attached. Copy the recipients from the top of the message.");
-      return;
-    }
-  }catch(e){
-    if(e && e.name==="AbortError"){ toast("Share cancelled. Tap “Download PDF” if you still need the file."); return; }
-    console.warn("Web Share unavailable, falling back:",e);
+  function deskFallback(){
+    triggerDownload(blob, filename);
+    const body=reminder+"\n\n"+summary;
+    const mailto="mailto:"+encodeURIComponent(data.header.mgrEmail)+"?subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
+    setTimeout(()=>{ window.location.href=mailto; },700);
+    toast("PDF downloaded — attach it to the email to your manager.");
   }
 
-  // Fallback: download the PDF and open a pre-filled email (recipients/subject/body set; attach the file manually).
-  triggerDownload(blob, filename);
-  const body=">>> Please attach the downloaded PDF (report + receipts) before sending. <<<\n\n"+summary;
-  const mailto="mailto:"+encodeURIComponent(data.header.empEmail)+"?cc="+encodeURIComponent(data.header.mgrEmail+","+PROCESSING_EMAIL)+"&subject="+encodeURIComponent(subject)+"&body="+encodeURIComponent(body);
-  setTimeout(()=>{ window.location.href=mailto; },700);
-  toast("PDF downloaded — attach it to the email that just opened.");
+  // Mobile/tablet: hand the PDF to the share sheet so it arrives already attached.
+  if(mobileLike && navigator.canShare){
+    try{
+      const file=new File([blob], filename, {type:"application/pdf"});
+      if(navigator.canShare({files:[file]})){
+        navigator.share({ files:[file], title:subject, text:subject+"\n\n"+sendTo+"\n\n"+summary })
+          .then(()=>toast("Shared — pick your mail app; the PDF is attached."))
+          .catch(e=>{ if(!(e && e.name==="AbortError")) deskFallback(); });
+        return;
+      }
+    }catch(e){ /* fall through to desktop path */ }
+  }
+  deskFallback();
 }
+
 
 function clearForm(){
   ["empName","locCode","empEmail","mgrEmail"].forEach(id=>$(id).value="");
@@ -1727,6 +1807,9 @@ $("clearBtn").addEventListener("click",()=>$("clearModal").classList.add("show")
 $("clearNo").addEventListener("click",()=>$("clearModal").classList.remove("show"));
 $("clearYes").addEventListener("click",()=>{ $("clearModal").classList.remove("show"); clearForm(); });
 $("clearModal").addEventListener("click",e=>{ if(e.target===$("clearModal")) $("clearModal").classList.remove("show"); });
+$("remindOk").addEventListener("click",()=>{ $("remindModal").classList.remove("show"); const cb=_remindCb; _remindCb=null; if(cb) cb(); });
+$("remindCancel").addEventListener("click",()=>{ $("remindModal").classList.remove("show"); _remindCb=null; });
+$("remindModal").addEventListener("click",e=>{ if(e.target===$("remindModal")){ $("remindModal").classList.remove("show"); _remindCb=null; } });
 $("pdfBtn").addEventListener("click",()=>{ if(validate()) downloadPdf(); });
 $("saveDraftBtn").addEventListener("click",saveDraftToFile);
 $("loadDraftBtn").addEventListener("click",()=>$("draftFileInput").click());
