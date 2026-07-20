@@ -477,6 +477,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
   .grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px 20px}
   .field{display:flex;flex-direction:column;gap:6px;min-width:0}
   .field.full{grid-column:1 / -1}
+  .remit-row{display:flex;flex-wrap:wrap;gap:10px}
+  .remit-opt{display:flex;align-items:center;gap:9px;flex:1 1 260px;min-width:0;border:1px solid var(--line-strong);border-radius:10px;padding:12px 14px;cursor:pointer;font-weight:600;background:#fff;transition:border-color .12s,background .12s}
+  .remit-opt:hover{border-color:var(--green-mid);background:var(--green-soft)}
+  .remit-opt input{width:18px;height:18px;accent-color:var(--green-dark);flex:0 0 auto;margin:0}
+  .remit-opt:has(input:checked){border-color:var(--green-dark);background:var(--green-soft)}
   label{font-size:13px;font-weight:600;color:var(--ink)}
   label .req{color:var(--danger);margin-left:2px}
   input[type=text],input[type=email],input[type=date],input[type=number],select,textarea{
@@ -612,6 +617,13 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     <h2>Employee details</h2>
     <p class="hint">Tell us who's submitting and what period this report covers.</p>
     <div class="grid">
+      <div class="field full">
+        <label>Reimbursement type <span class="req">*</span></label>
+        <div class="remit-row">
+          <label class="remit-opt"><input type="radio" name="remitType" value="employee" checked /><span>Remit Expenses to Employee</span></label>
+          <label class="remit-opt"><input type="radio" name="remitType" value="corp" /><span>Remit to Roots Corporate Credit Card</span></label>
+        </div>
+      </div>
       <div class="field">
         <label for="empName">Employee Name (First Last) <span class="req">*</span></label>
         <input type="text" id="empName" autocomplete="name" />
@@ -732,7 +744,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260617-1945";
+const APP_VERSION = "v20260720-1200";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -1394,6 +1406,7 @@ function gather(){
   const header={
     name:$("empName").value.trim(), dept:$("empDept").value,
     locCode:effectiveLocCode(),
+    remit:(document.querySelector('input[name="remitType"]:checked')||{}).value||"employee",
     from:"", to:"",
     empEmail:$("empEmail").value.trim(), mgrEmail:$("mgrEmail").value.trim(),
   };
@@ -1444,11 +1457,14 @@ function buildPdf(data, linkBoxes){
   const {jsPDF}=window.jspdf; const doc=new jsPDF({unit:"pt",format:"a4",orientation:"landscape"});
   const {header,rows}=data; const t=totalsByCurrency(rows); const M=40;
   const pw=doc.internal.pageSize.getWidth();
-  doc.setFillColor(24,48,40); doc.rect(0,0,pw,70,"F");
-  doc.setTextColor(255); doc.setFont("helvetica","bold"); doc.setFontSize(16); doc.text("Roots — Expense Report",M,36);
-  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(180,205,190); doc.text("Generated "+new Date().toLocaleString()+"   ·   Form "+APP_VERSION,M,52);
+  const _corp=header.remit==="corp";
+  const _bar=_corp?[139,26,26]:[24,48,40], _head=_corp?[150,42,42]:[43,82,51], _sub=_corp?[235,200,200]:[180,205,190], _txt=_corp?[139,26,26]:[24,48,40];
+  const _title=_corp?"Roots — Corporate Credit Card Spend":"Roots — Expense Report";
+  doc.setFillColor(_bar[0],_bar[1],_bar[2]); doc.rect(0,0,pw,70,"F");
+  doc.setTextColor(255); doc.setFont("helvetica","bold"); doc.setFontSize(16); doc.text(_title,M,36);
+  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(_sub[0],_sub[1],_sub[2]); doc.text("Generated "+new Date().toLocaleString()+"   ·   Form "+APP_VERSION,M,52);
   let y=92; doc.setTextColor(30); doc.setFontSize(10);
-  [["Employee",header.name],["Function",header.dept+(header.locCode?(" ("+header.locCode+")"):"")],["Period",periodText(header)],["Employee email",header.empEmail],["Manager email",header.mgrEmail],["Form version",APP_VERSION]]
+  [["Employee",header.name],["Function",header.dept+(header.locCode?(" ("+header.locCode+")"):"")],["Period",periodText(header)],["Remit to",_corp?"Corporate Credit Card":"Employee"],["Employee email",header.empEmail],["Manager email",header.mgrEmail],["Form version",APP_VERSION]]
     .forEach(([k,v])=>{ doc.setFont("helvetica","bold"); doc.text(k+":",M,y); doc.setFont("helvetica","normal"); doc.text(String(v||""),M+110,y); y+=16; });
   y+=6;
   doc.autoTable({
@@ -1457,7 +1473,7 @@ function buildPdf(data, linkBoxes){
     body:rows.map(r=>{ const files=r.type==="mileage"?"—":((itemFiles[r.iid]||[]).map((f,i)=>fileTag(r.id,i)).join(", ")||"—");
       return [r.id, r.type==="mileage"?"Mileage":"Invoice", r.date||"—", descForOutput(r), glDisplay(r,header.locCode), r.province||"—", r.currency, r.amount.toFixed(2), r.tax.toFixed(2), r.total.toFixed(2), files]; }),
     styles:{fontSize:8,cellPadding:3.5,overflow:"linebreak",valign:"top"},
-    headStyles:{fillColor:[43,82,51],textColor:255,valign:"middle"},
+    headStyles:{fillColor:_head,textColor:255,valign:"middle"},
     columnStyles:{
       0:{cellWidth:20,halign:"right"}, 1:{cellWidth:46}, 2:{cellWidth:60}, 3:{cellWidth:176}, 4:{cellWidth:92},
       5:{cellWidth:92}, 6:{cellWidth:28}, 7:{cellWidth:64,halign:"right"}, 8:{cellWidth:54,halign:"right"},
@@ -1492,7 +1508,7 @@ function buildPdf(data, linkBoxes){
       }catch(e){}
     },
   });
-  let fy=doc.lastAutoTable.finalY+18; doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(24,48,40);
+  let fy=doc.lastAutoTable.finalY+18; doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(_txt[0],_txt[1],_txt[2]);
   doc.text("Total Amount (CAD): $"+t.CAD.total.toFixed(2),M,fy); fy+=16;
   doc.text("Total Amount (USD): $"+t.USD.total.toFixed(2),M,fy);
   addApSummaryPage(doc, data);
@@ -1502,11 +1518,13 @@ function buildPdf(data, linkBoxes){
 // Accounts Payable recap: claim by GL account, sales tax by province, total claim. Its own page (before attachments).
 function addApSummaryPage(doc, data){
   const {header,rows}=data; const M=40;
+  const _corp=header.remit==="corp";
+  const _bar=_corp?[139,26,26]:[24,48,40], _head=_corp?[150,42,42]:[43,82,51], _sub=_corp?[235,200,200]:[180,205,190], _txt=_corp?[139,26,26]:[24,48,40];
   doc.addPage();
   const pw=doc.internal.pageSize.getWidth();
-  doc.setFillColor(24,48,40); doc.rect(0,0,pw,56,"F");
+  doc.setFillColor(_bar[0],_bar[1],_bar[2]); doc.rect(0,0,pw,56,"F");
   doc.setTextColor(255); doc.setFont("helvetica","bold"); doc.setFontSize(15); doc.text("Accounts Payable Summary",M,30);
-  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(180,205,190);
+  doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(_sub[0],_sub[1],_sub[2]);
   doc.text(header.name+"  ·  "+periodText(header),M,46);
 
   const glMap=new Map(), taxMap=new Map();
@@ -1518,28 +1536,28 @@ function addApSummaryPage(doc, data){
   });
   const t=totalsByCurrency(rows);
 
-  let y=78; doc.setTextColor(24,48,40); doc.setFont("helvetica","bold"); doc.setFontSize(11);
+  let y=78; doc.setTextColor(_txt[0],_txt[1],_txt[2]); doc.setFont("helvetica","bold"); doc.setFontSize(11);
   doc.text("1. Expense claim by GL account (pre-tax)",M,y); y+=6;
   doc.autoTable({
     startY:y, margin:{left:M,right:M}, tableWidth:320,
     head:[["GL account","Cur","Pre-Tax Amount"]],
     body:[...glMap.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>{ const [gl,cur]=k.split("|"); return [gl,cur,"$"+v.toFixed(2)]; }),
-    styles:{fontSize:9,cellPadding:4}, headStyles:{fillColor:[43,82,51],textColor:255},
+    styles:{fontSize:9,cellPadding:4}, headStyles:{fillColor:_head,textColor:255},
     columnStyles:{1:{cellWidth:40,halign:"center"},2:{halign:"right"}}, theme:"grid",
   });
 
-  y=doc.lastAutoTable.finalY+18; doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(24,48,40);
+  y=doc.lastAutoTable.finalY+18; doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(_txt[0],_txt[1],_txt[2]);
   doc.text("2. Sales tax claimed by province",M,y); y+=6;
   const taxBody=[...taxMap.entries()].sort((a,b)=>a[0].localeCompare(b[0])).map(([k,v])=>{ const [p,cur]=k.split("|"); return [p,cur,"$"+v.toFixed(2)]; });
   doc.autoTable({
     startY:y, margin:{left:M,right:M}, tableWidth:320,
     head:[["Province / region","Cur","Sales Tax"]],
     body: taxBody.length?taxBody:[["No sales tax claimed","—","$0.00"]],
-    styles:{fontSize:9,cellPadding:4}, headStyles:{fillColor:[43,82,51],textColor:255},
+    styles:{fontSize:9,cellPadding:4}, headStyles:{fillColor:_head,textColor:255},
     columnStyles:{1:{cellWidth:40,halign:"center"},2:{halign:"right"}}, theme:"grid",
   });
 
-  y=doc.lastAutoTable.finalY+18; doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(24,48,40);
+  y=doc.lastAutoTable.finalY+18; doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(_txt[0],_txt[1],_txt[2]);
   doc.text("3. Total claim",M,y); y+=6;
   const totBody=[];
   if(t.CAD.amount||t.CAD.tax||t.CAD.total) totBody.push(["CAD","$"+t.CAD.amount.toFixed(2),"$"+t.CAD.tax.toFixed(2),"$"+t.CAD.total.toFixed(2)]);
@@ -1549,7 +1567,7 @@ function addApSummaryPage(doc, data){
     startY:y, margin:{left:M,right:M}, tableWidth:380,
     head:[["Currency","Pre-Tax","Sales Tax","Total Claim"]],
     body: totBody,
-    styles:{fontSize:9,cellPadding:4}, headStyles:{fillColor:[24,48,40],textColor:255},
+    styles:{fontSize:9,cellPadding:4}, headStyles:{fillColor:_bar,textColor:255},
     columnStyles:{0:{cellWidth:70},1:{halign:"right"},2:{halign:"right"},3:{halign:"right",fontStyle:"bold"}}, theme:"grid",
   });
   return doc;
@@ -1591,7 +1609,7 @@ async function buildFullPdfBytes(data){
   const merged=await PDFDocument.load(summaryBytes);
   const bold=await merged.embedFont(StandardFonts.HelveticaBold);
   const reg=await merged.embedFont(StandardFonts.Helvetica);
-  const PAGE_W=595.28, PAGE_H=841.89, M=40, HB=32, green=rgb(24/255,48/255,40/255);
+  const PAGE_W=595.28, PAGE_H=841.89, M=40, HB=32, _corpHdr=(data.header&&data.header.remit==="corp"), green=_corpHdr?rgb(139/255,26/255,26/255):rgb(24/255,48/255,40/255);
   const tagToPage={}; // file reference -> 0-based page index in the merged PDF
 
   // Add an internal (page-to-page) link annotation. Defensive: failure just means no link.
@@ -1711,13 +1729,18 @@ async function submit(){
 
 function finishSubmit(data, blob, filename, mobileLike, reminder){
   const t=totalsByCurrency(data.rows);
-  const subject=data.header.name+"'s Expense Report";
+  const corp=data.header.remit==="corp";
+  const subject=data.header.name+(corp?"'s Corporate CC Spend":"'s Expense Report");
   const sendTo="Send to (manager): "+data.header.mgrEmail;
+  const firstLine=corp
+    ? "Please find my corporate credit card spend report for approval and processing. Once approved, please forward to accountspayable@roots.com and wbrunet@roots.com, and note it is approved."
+    : "Please find my expense report for approval and processing. Once approved, please forward to "+PROCESSING_EMAIL+" and note it is approved.";
   const summary=["Hi,","",
-    "Please find my expense report for approval and processing. Once approved, please forward to "+PROCESSING_EMAIL+" and note it is approved.","",
+    firstLine,"",
     "Employee: "+data.header.name,
     "Function: "+data.header.dept+(data.header.locCode?(" ("+data.header.locCode+")"):""),
     "Period: "+periodText(data.header),
+    "Remit to: "+(corp?"Corporate Credit Card":"Employee"),
     "Items: "+data.rows.length,
     "Total (CAD): $"+t.CAD.total.toFixed(2),"Total (USD): $"+t.USD.total.toFixed(2),"",
     "Thank you,",data.header.name].join("\n");
