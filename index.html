@@ -744,7 +744,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260720-1200";
+const APP_VERSION = "v20260720-1230-AIoff";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -755,6 +755,9 @@ const APP_VERSION = "v20260720-1200";
 const AI_PROXY_URL = "https://roots-expense-ai.lwu-ccd.workers.dev";
 const AI_APP_TOKEN = "";
 const AI_ENABLED = !!AI_PROXY_URL;
+// TEMPORARY: show the AI button but keep it disabled ("coming soon") until the Claude API is live.
+// Flip this to false to turn AI scanning back on. No other changes needed.
+const AI_COMING_SOON = true;
 const DEPARTMENTS_NEEDING_LOCATION = ["Stores", "Partners and Other", "Head Office"];
 
 // Functions whose location/department code is a fixed dropdown (code is the option value; label shows "code - name").
@@ -920,7 +923,7 @@ function itemTemplate(internalId){
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button type="button" class="btn-secondary" data-fileadd style="padding:9px 16px">Upload receipt</button>
             <button type="button" class="btn-secondary mobile-only" data-cameraadd style="padding:9px 16px">Take photo</button>
-            ${AI_ENABLED ? '<button type="button" class="btn-secondary" data-aiscan style="padding:9px 16px">\u2728 Scan receipt with AI</button>' : ''}
+            ${AI_ENABLED ? (AI_COMING_SOON ? '<button type="button" class="btn-secondary" data-aiscan style="padding:9px 16px" disabled title="AI receipt scanning is coming soon">AI Scan - Coming Soon!</button>' : '<button type="button" class="btn-secondary" data-aiscan style="padding:9px 16px">\u2728 Scan receipt with AI</button>') : ''}
           </div>
           ${AI_ENABLED ? '<div class="helper" data-aistatus style="margin-top:6px"></div>' : ''}
           <div class="filelist" data-filelist></div>
@@ -1089,7 +1092,7 @@ function wireItem(node,id){
 function isHeic(f){ return /image\/hei[cf]/i.test(f.type||"") || /\.(heic|heif)$/i.test(f.name||""); }
 /* ---- AI receipt scanning (optional pilot) ---- */
 async function aiScan(node,id){
-  if(!AI_ENABLED) return;
+  if(!AI_ENABLED || AI_COMING_SOON) return;
   const status=node.querySelector("[data-aistatus]");
   const setStatus=(t,err,warn)=>{ if(status){ status.textContent=t; status.style.color = err?"var(--danger)":(warn?"#B26B00":"var(--muted)"); } };
   if(!$("empDept").value){
@@ -1203,7 +1206,7 @@ function renderFiles(id){
   list.querySelectorAll("[data-rmfile]").forEach(btn=>btn.addEventListener("click",()=>{ itemFiles[id].splice(Number(btn.dataset.rmfile),1); renderFiles(id); }));
   node.querySelector("[data-filecount]").innerHTML=files.length+" / "+MAX_FILES_PER_ITEM+" &middot; 20 MB max each";
   const aibtn=node.querySelector("[data-aiscan]");
-  if(aibtn){
+  if(aibtn && !AI_COMING_SOON){
     if(files.length>1){ aibtn.disabled=true; aibtn.textContent="AI Unavailable on Multiple Receipts"; }
     else { aibtn.disabled=false; aibtn.textContent="\u2728 Scan receipt with AI"; }
   }
