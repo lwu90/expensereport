@@ -668,6 +668,23 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
     </div>
   </section>
 
+  <!-- ============ CORPORATE CARD STATEMENT (corp only) ============ -->
+  <section class="section" id="ccStatementSection" style="display:none">
+    <h2>Corporate credit card statement</h2>
+    <p class="hint">Please provide the corporate credit card statement you are filing expenses for. This is optional, but attaching it helps Accounts Payable reconcile your claim. It will be included at the front of your report PDF.</p>
+    <div class="files" style="border-top:none;margin-top:0;padding-top:0">
+      <div class="files-head">
+        <span class="t">Statement file(s)</span>
+        <span style="font-size:12px;color:var(--muted)" data-ccstmtcount>0 file(s) &middot; 20 MB max each</span>
+      </div>
+      <input type="file" id="ccStmtInput" multiple class="hidden" />
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button type="button" class="btn-secondary" id="ccStmtAdd" style="padding:9px 16px">Upload statement</button>
+      </div>
+      <div class="filelist" id="ccStmtList"></div>
+    </div>
+  </section>
+
   <!-- ============ EXPENSE ITEMS ============ -->
   <section class="section">
     <h2>Expense items</h2>
@@ -744,7 +761,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260720-1230-AIoff";
+const APP_VERSION = "v20260727-1600-AIoff";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -826,6 +843,30 @@ const OTHER_GL = "__OTHER__";
    ============================================================ */
 let nextSeq = 0;
 const itemFiles = {};
+const ccStatementFiles = [];  // corporate credit card statement (corp reimbursement only)
+function ccRemitIsCorp(){ return ((document.querySelector('input[name="remitType"]:checked')||{}).value)==="corp"; }
+function syncCcStmtVisibility(){ const sec=$("ccStatementSection"); if(sec) sec.style.display = ccRemitIsCorp() ? "" : "none"; }
+async function handleCcStmtFiles(fileList){
+  for(const raw of fileList){
+    let f=raw;
+    if(isHeic(f)){ toast("Converting photo to JPEG…"); f=await convertIfHeic(f); }
+    if(f.size>MAX_FILE_BYTES){ toast('"'+f.name+'" exceeds 20 MB and was skipped.',true); continue; }
+    ccStatementFiles.push(f);
+    renderCcStmt();
+  }
+  renderCcStmt();
+}
+function renderCcStmt(){
+  const list=$("ccStmtList"); if(!list) return;
+  list.innerHTML=ccStatementFiles.map((f,i)=>`
+    <div class="filechip">
+      <span class="meta"><span class="tag">CC</span><span class="fname" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</span></span>
+      <span style="display:flex;align-items:center;gap:10px;flex:none"><span class="fsize">${fileSizeLabel(f.size)}</span><button type="button" class="btn-link" data-rmccstmt="${i}">Remove</button></span>
+    </div>`).join("");
+  list.querySelectorAll("[data-rmccstmt]").forEach(btn=>btn.addEventListener("click",()=>{ ccStatementFiles.splice(Number(btn.dataset.rmccstmt),1); renderCcStmt(); }));
+  const c=document.querySelector("[data-ccstmtcount]");
+  if(c) c.innerHTML=ccStatementFiles.length+" file(s) &middot; 20 MB max each";
+}
 
 (function(){
   var av=document.getElementById("appVersion");
@@ -1582,22 +1623,40 @@ function isPdfFile(f){ return (f.type||"")==="application/pdf" || /\.pdf$/i.test
 function truncate(s,n){ s=s||""; return s.length>n ? s.slice(0,n-1)+"…" : s; }
 
 // Re-encode any raster image to JPEG bytes via canvas (handles png/jpg/gif/webp/bmp), capped to keep size sane.
+function dataUrlToBytes(dataUrl){
+  const comma=dataUrl.indexOf(","); const b64=dataUrl.slice(comma+1);
+  const bin=atob(b64); const out=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
+  return out;
+}
 function imageFileToJpegBytes(file){
   return new Promise((resolve,reject)=>{
     const url=URL.createObjectURL(file);
+    let settled=false;
+    const done=(fn,arg)=>{ if(settled) return; settled=true; try{URL.revokeObjectURL(url);}catch(_){} fn(arg); };
+    // Hard timeout so a stuck decode/encode can never freeze the whole PDF build.
+    const timer=setTimeout(()=>done(reject,new Error("image conversion timed out")), 20000);
+    const finish=(fn,arg)=>{ clearTimeout(timer); done(fn,arg); };
     const img=new Image();
     img.onload=()=>{
-      const maxDim=2200;
-      const scale=Math.min(1, maxDim/Math.max(img.naturalWidth,img.naturalHeight));
-      const canvas=document.createElement("canvas");
-      canvas.width=Math.max(1,Math.round(img.naturalWidth*scale));
-      canvas.height=Math.max(1,Math.round(img.naturalHeight*scale));
-      const ctx=canvas.getContext("2d");
-      ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
-      ctx.drawImage(img,0,0,canvas.width,canvas.height);
-      canvas.toBlob(async b=>{ URL.revokeObjectURL(url); if(!b){reject(new Error("encode failed"));return;} resolve(new Uint8Array(await b.arrayBuffer())); },"image/jpeg",0.85);
+      try{
+        const maxDim=2200;
+        const scale=Math.min(1, maxDim/Math.max(img.naturalWidth||1,img.naturalHeight||1));
+        const canvas=document.createElement("canvas");
+        canvas.width=Math.max(1,Math.round((img.naturalWidth||1)*scale));
+        canvas.height=Math.max(1,Math.round((img.naturalHeight||1)*scale));
+        const ctx=canvas.getContext("2d");
+        if(!ctx){ finish(reject,new Error("no canvas context")); return; }
+        ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.drawImage(img,0,0,canvas.width,canvas.height);
+        // Prefer toBlob; fall back to toDataURL for browsers where toBlob is missing or yields null.
+        const useDataUrl=()=>{ try{ finish(resolve, dataUrlToBytes(canvas.toDataURL("image/jpeg",0.85))); }catch(e){ finish(reject,e); } };
+        if(typeof canvas.toBlob==="function"){
+          canvas.toBlob(async b=>{ if(!b){ useDataUrl(); return; } try{ finish(resolve, new Uint8Array(await b.arrayBuffer())); }catch(e){ finish(reject,e); } },"image/jpeg",0.85);
+        } else { useDataUrl(); }
+      }catch(e){ finish(reject,e); }
     };
-    img.onerror=()=>{ URL.revokeObjectURL(url); reject(new Error("image load failed")); };
+    img.onerror=()=>{ finish(reject,new Error("image load failed")); };
     img.src=url;
   });
 }
@@ -1651,6 +1710,50 @@ async function buildFullPdfBytes(data){
     }catch(e){}
   }
 
+  // Corporate credit card statement pages (corp reimbursement only) — placed at the front of the appendix.
+  if(data.header && data.header.remit==="corp" && ccStatementFiles.length){
+    for(let i=0;i<ccStatementFiles.length;i++){
+      const f=ccStatementFiles[i], many=ccStatementFiles.length>1;
+      const label="Corporate Credit Card Statement"+(many?" ("+(i+1)+"/"+ccStatementFiles.length+")":"");
+      const sub=f.name;
+      let handled=false;
+      if(isImageFile(f)){
+        try{
+          const buf=new Uint8Array(await f.arrayBuffer());
+          const sigPng = buf.length>7 && buf[0]===0x89&&buf[1]===0x50&&buf[2]===0x4E&&buf[3]===0x47;
+          const sigJpg = buf.length>2 && buf[0]===0xFF&&buf[1]===0xD8&&buf[2]===0xFF;
+          const viaCanvas = async()=> merged.embedJpg(await imageFileToJpegBytes(f));
+          const viaNative = async()=> sigPng ? merged.embedPng(buf) : (sigJpg ? merged.embedJpg(buf) : null);
+          const order = sigPng ? [viaNative, viaCanvas] : [viaCanvas, viaNative];
+          let img=null;
+          for(const attempt of order){ if(img) break; try{ img=await attempt(); }catch(e){ img=null; } }
+          if(img){
+            const page=merged.addPage([PAGE_W,PAGE_H]);
+            header(page,label,sub);
+            const aw=PAGE_W-2*M, ah=PAGE_H-HB-2*M;
+            const s=Math.min(aw/img.width, ah/img.height, 1);
+            const w=img.width*s, h=img.height*s;
+            page.drawImage(img,{x:(PAGE_W-w)/2, y:M+((ah-h)/2), width:w, height:h});
+            handled=true;
+          }
+        }catch(e){ console.warn("cc statement image embed failed",e); }
+      } else if(isPdfFile(f)){
+        try{
+          const src=await PDFDocument.load(await f.arrayBuffer(),{ignoreEncryption:true});
+          const copied=await merged.copyPages(src, src.getPageIndices());
+          copied.forEach((p,idx)=>{ merged.addPage(p); header(p, label+(copied.length>1?(" p."+(idx+1)+"/"+copied.length):""), sub); });
+          handled=true;
+        }catch(e){ console.warn("cc statement pdf merge failed",e); }
+      }
+      if(!handled){
+        const page=merged.addPage([PAGE_W,PAGE_H]);
+        header(page,label,sub);
+        page.drawText("This statement file can't be rendered in the PDF.",{x:M,y:PAGE_H-HB-56,size:12,font:reg,color:rgb(0.1,0.1,0.1)});
+        page.drawText("The original file is named "+f.name+".",{x:M,y:PAGE_H-HB-76,size:11,font:reg,color:rgb(0.35,0.35,0.35)});
+      }
+    }
+  }
+
   for(const r of data.rows){
     if(r.type==="mileage") continue;
     const files=itemFiles[r.iid]||[];
@@ -1659,15 +1762,26 @@ async function buildFullPdfBytes(data){
       let handled=false;
       if(isImageFile(f)){
         try{
-          const png=await merged.embedJpg(await imageFileToJpegBytes(f));
-          tagToPage[label]=merged.getPageCount();
-          const page=merged.addPage([PAGE_W,PAGE_H]);
-          header(page,label,sub);
-          const aw=PAGE_W-2*M, ah=PAGE_H-HB-2*M;
-          const s=Math.min(aw/png.width, ah/png.height, 1);
-          const w=png.width*s, h=png.height*s;
-          page.drawImage(png,{x:(PAGE_W-w)/2, y:M+((ah-h)/2), width:w, height:h});
-          handled=true;
+          const buf=new Uint8Array(await f.arrayBuffer());
+          const sigPng = buf.length>7 && buf[0]===0x89&&buf[1]===0x50&&buf[2]===0x4E&&buf[3]===0x47;
+          const sigJpg = buf.length>2 && buf[0]===0xFF&&buf[1]===0xD8&&buf[2]===0xFF;
+          // Downscale via canvas keeps file sizes small; native embed (no canvas) is the reliable fallback.
+          const viaCanvas = async()=> merged.embedJpg(await imageFileToJpegBytes(f));
+          const viaNative = async()=> sigPng ? merged.embedPng(buf) : (sigJpg ? merged.embedJpg(buf) : null);
+          // PNGs are most reliable embedded natively; photos (JPEG/other) go through the downscaler first.
+          const order = sigPng ? [viaNative, viaCanvas] : [viaCanvas, viaNative];
+          let img=null;
+          for(const attempt of order){ if(img) break; try{ img=await attempt(); }catch(e){ img=null; } }
+          if(img){
+            tagToPage[label]=merged.getPageCount();
+            const page=merged.addPage([PAGE_W,PAGE_H]);
+            header(page,label,sub);
+            const aw=PAGE_W-2*M, ah=PAGE_H-HB-2*M;
+            const s=Math.min(aw/img.width, ah/img.height, 1);
+            const w=img.width*s, h=img.height*s;
+            page.drawImage(img,{x:(PAGE_W-w)/2, y:M+((ah-h)/2), width:w, height:h});
+            handled=true;
+          }
         }catch(e){ console.warn("image embed failed",label,e); }
       } else if(isPdfFile(f)){
         try{
@@ -1867,6 +1981,11 @@ document.querySelectorAll("#empName,#empDept,#empEmail,#mgrEmail").forEach(el=>{
 });
 
 restoreAutosave();
+syncCcStmtVisibility();
+document.querySelectorAll('input[name="remitType"]').forEach(r=>r.addEventListener("change",syncCcStmtVisibility));
+if($("ccStmtAdd")) $("ccStmtAdd").addEventListener("click",()=>$("ccStmtInput").click());
+if($("ccStmtInput")) $("ccStmtInput").addEventListener("change",e=>{ handleCcStmtFiles(e.target.files); e.target.value=""; });
+renderCcStmt();
 renderLocField($("empDept").value, $("locCode")?$("locCode").value:"");
 rebuildAllGl();
 addItem(); addItem(); addItem();
