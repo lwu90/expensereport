@@ -761,7 +761,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260827-0130-AIoff";
+const APP_VERSION = "v20260827-1500-AIoff";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -1723,7 +1723,7 @@ async function buildFullPdfBytes(data){
           const sigPng = buf.length>7 && buf[0]===0x89&&buf[1]===0x50&&buf[2]===0x4E&&buf[3]===0x47;
           const sigJpg = buf.length>2 && buf[0]===0xFF&&buf[1]===0xD8&&buf[2]===0xFF;
           const viaCanvas = async()=> merged.embedJpg(await imageFileToJpegBytes(f));
-          const viaNative = async()=> sigPng ? merged.embedPng(buf) : (sigJpg ? merged.embedJpg(buf) : null);
+          const viaNative = async()=>{ if(sigPng){ const pw=(buf[16]<<24|buf[17]<<16|buf[18]<<8|buf[19])>>>0, ph=(buf[20]<<24|buf[21]<<16|buf[22]<<8|buf[23])>>>0; if(pw>0&&ph>0&&pw*ph>4000000) return null; return merged.embedPng(buf); } return sigJpg ? merged.embedJpg(buf) : null; };
           // Downscale via canvas first (caps at 2200px) so large statement screenshots don't blow up memory; native embed is the fallback.
           const order = [viaCanvas, viaNative];
           let img=null;
@@ -1768,7 +1768,7 @@ async function buildFullPdfBytes(data){
           const sigJpg = buf.length>2 && buf[0]===0xFF&&buf[1]===0xD8&&buf[2]===0xFF;
           // Downscale via canvas FIRST (caps at 2200px) so large screenshots/PNGs don't blow up tab memory during save; native embed is the fallback when canvas is unavailable.
           const viaCanvas = async()=> merged.embedJpg(await imageFileToJpegBytes(f));
-          const viaNative = async()=> sigPng ? merged.embedPng(buf) : (sigJpg ? merged.embedJpg(buf) : null);
+          const viaNative = async()=>{ if(sigPng){ const pw=(buf[16]<<24|buf[17]<<16|buf[18]<<8|buf[19])>>>0, ph=(buf[20]<<24|buf[21]<<16|buf[22]<<8|buf[23])>>>0; if(pw>0&&ph>0&&pw*ph>4000000) return null; return merged.embedPng(buf); } return sigJpg ? merged.embedJpg(buf) : null; };
           const order = [viaCanvas, viaNative];
           let img=null;
           for(const attempt of order){ if(img) break; try{ img=await attempt(); }catch(e){ img=null; } }
@@ -1816,11 +1816,19 @@ async function buildFullPdfBytes(data){
   return await merged.save();
 }
 
+function reportBuildError(e){
+  console.error("PDF build failed:", e);
+  var msg = (e && (e.message || e.name)) ? ((e.name||"Error")+": "+(e.message||"")) : String(e);
+  var where = (e && e.stack) ? String(e.stack).split("\n")[1]||"" : "";
+  toast("Couldn't build the PDF — "+msg, true);
+  try{ alert("Couldn't build the PDF.\n\n"+msg+(where?("\n"+where.trim()):"")+"\n\nPlease screenshot this message so the issue can be fixed."); }catch(_){}
+}
+
 async function downloadPdf(){
   if(!window.jspdf){ toast("PDF library didn't load — check your connection.",true); return; }
   const d=gather(); toast("Building PDF with attachments…");
   try{ const bytes=await buildFullPdfBytes(d); triggerDownload(new Blob([bytes],{type:"application/pdf"}),fileBase(d)+".pdf"); }
-  catch(e){ console.error(e); toast("Couldn't build the PDF.",true); }
+  catch(e){ reportBuildError(e); }
 }
 
 function triggerDownload(blob,filename){ const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); setTimeout(()=>{document.body.removeChild(a); URL.revokeObjectURL(url);},1500); }
@@ -1833,7 +1841,7 @@ async function submit(){
   const data=gather(); toast("Building your PDF…");
   let pdfBytes;
   try{ pdfBytes=await buildFullPdfBytes(data); }
-  catch(e){ console.error(e); toast("Couldn't build the PDF.",true); return; }
+  catch(e){ reportBuildError(e); return; }
   const filename=fileBase(data)+".pdf";
   const blob=new Blob([pdfBytes],{type:"application/pdf"});
   const mobileLike = window.matchMedia && window.matchMedia("(pointer:coarse) and (hover:none)").matches;
