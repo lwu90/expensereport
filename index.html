@@ -761,7 +761,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260827-1500-AIoff";
+const APP_VERSION = "v20260827-1600-AIoff";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -1446,6 +1446,28 @@ function validate(){
 /* ============================================================
    GATHER + OUTPUTS
    ============================================================ */
+// The PDF standard fonts use WinAnsi encoding, which can't encode many Unicode
+// characters (notably U+202F, the narrow no-break space macOS puts in screenshot
+// filenames). Map the common typographic ones to safe equivalents and drop the rest,
+// so drawing any dynamic string (filenames, pasted text) can never throw.
+function sanitizeWinAnsi(s){
+  if(s==null) return s;
+  return String(s)
+    .replace(/[\u00A0\u1680\u2000-\u200A\u202F\u205F\u3000]/g," ")   // exotic spaces -> normal space
+    .replace(/[\u2018\u2019\u201A\u201B\u2032]/g,"'")                  // single quotes
+    .replace(/[\u201C\u201D\u201E\u201F\u2033]/g,'"')                  // double quotes
+    .replace(/[\u2010\u2011\u2012\u2013\u2014\u2015]/g,"-")            // dashes -> hyphen
+    .replace(/\u2026/g,"...")                                          // ellipsis
+    .replace(/[\u2022\u2023\u25E6\u00B7]/g,"-")                        // bullets/middot
+    .replace(/\u2122/g,"(TM)").replace(/\u20AC/g,"EUR")
+    .replace(/\u0152/g,"OE").replace(/\u0153/g,"oe")
+    .replace(/\u0160/g,"S").replace(/\u0161/g,"s")
+    .replace(/\u017D/g,"Z").replace(/\u017E/g,"z")
+    .replace(/\u0178/g,"Y").replace(/\u0192/g,"f")
+    .replace(/[\u200B\u200C\u200D\u200E\u200F\u2060\uFEFF]/g,"")       // zero-width / marks -> removed
+    .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u00FF]/g,"");             // drop anything still unencodable
+}
+
 function gather(){
   const header={
     name:$("empName").value.trim(), dept:$("empDept").value,
@@ -1467,6 +1489,13 @@ function gather(){
   // Period = earliest and latest item date (ISO YYYY-MM-DD sorts correctly as text).
   const dates=rows.map(r=>r.date).filter(d=>/^\d{4}-\d{2}-\d{2}$/.test(d)).sort();
   if(dates.length){ header.from=dates[0]; header.to=dates[dates.length-1]; }
+  // Clean pasted/typed text so the PDF's standard fonts can encode it.
+  header.name=sanitizeWinAnsi(header.name); header.locCode=sanitizeWinAnsi(header.locCode);
+  rows.forEach(r=>{
+    r.description=sanitizeWinAnsi(r.description);
+    r.fromAddr=sanitizeWinAnsi(r.fromAddr); r.toAddr=sanitizeWinAnsi(r.toAddr);
+    r.project=sanitizeWinAnsi(r.project); r.locOverride=sanitizeWinAnsi(r.locOverride);
+  });
   return {header,rows};
 }
 function periodText(h){ return (h.from&&h.to)?(h.from+" to "+h.to):(h.from||h.to||"\u2014"); }
@@ -1698,8 +1727,8 @@ async function buildFullPdfBytes(data){
   function header(page,label,sub){
     const {width,height}=page.getSize();
     page.drawRectangle({x:0,y:height-HB,width:width,height:HB,color:green});
-    page.drawText(label,{x:M,y:height-21,size:13,font:bold,color:rgb(1,1,1)});
-    if(sub) page.drawText(truncate(sub,60),{x:M+52,y:height-20,size:9,font:reg,color:rgb(0.78,0.85,0.80)});
+    page.drawText(sanitizeWinAnsi(label),{x:M,y:height-21,size:13,font:bold,color:rgb(1,1,1)});
+    if(sub) page.drawText(truncate(sanitizeWinAnsi(sub),60),{x:M+52,y:height-20,size:9,font:reg,color:rgb(0.78,0.85,0.80)});
     // "Back to Cover Page" — traditional blue, underlined, just below the header bar (on the white area).
     try{
       const bt="Back to Cover Page", fs=9, tw=reg.widthOfTextAtSize(bt,fs);
@@ -1750,7 +1779,7 @@ async function buildFullPdfBytes(data){
         const page=merged.addPage([PAGE_W,PAGE_H]);
         header(page,label,sub);
         page.drawText("This statement file can't be rendered in the PDF.",{x:M,y:PAGE_H-HB-56,size:12,font:reg,color:rgb(0.1,0.1,0.1)});
-        page.drawText("The original file is named "+f.name+".",{x:M,y:PAGE_H-HB-76,size:11,font:reg,color:rgb(0.35,0.35,0.35)});
+        page.drawText(sanitizeWinAnsi("The original file is named "+f.name+"."),{x:M,y:PAGE_H-HB-76,size:11,font:reg,color:rgb(0.35,0.35,0.35)});
       }
     }
   }
@@ -1797,7 +1826,7 @@ async function buildFullPdfBytes(data){
         const page=merged.addPage([PAGE_W,PAGE_H]);
         header(page,label,sub);
         page.drawText("This attachment can't be rendered in the PDF.",{x:M,y:PAGE_H-HB-56,size:12,font:reg,color:rgb(0.1,0.1,0.1)});
-        page.drawText("The original file is named "+label+ext(f.name)+".",{x:M,y:PAGE_H-HB-76,size:11,font:reg,color:rgb(0.35,0.35,0.35)});
+        page.drawText(sanitizeWinAnsi("The original file is named "+label+ext(f.name)+"."),{x:M,y:PAGE_H-HB-76,size:11,font:reg,color:rgb(0.35,0.35,0.35)});
       }
     }
   }
