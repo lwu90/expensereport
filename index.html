@@ -761,7 +761,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260727-1600-AIoff";
+const APP_VERSION = "v20260827-0130-AIoff";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -1724,7 +1724,8 @@ async function buildFullPdfBytes(data){
           const sigJpg = buf.length>2 && buf[0]===0xFF&&buf[1]===0xD8&&buf[2]===0xFF;
           const viaCanvas = async()=> merged.embedJpg(await imageFileToJpegBytes(f));
           const viaNative = async()=> sigPng ? merged.embedPng(buf) : (sigJpg ? merged.embedJpg(buf) : null);
-          const order = sigPng ? [viaNative, viaCanvas] : [viaCanvas, viaNative];
+          // Downscale via canvas first (caps at 2200px) so large statement screenshots don't blow up memory; native embed is the fallback.
+          const order = [viaCanvas, viaNative];
           let img=null;
           for(const attempt of order){ if(img) break; try{ img=await attempt(); }catch(e){ img=null; } }
           if(img){
@@ -1765,11 +1766,10 @@ async function buildFullPdfBytes(data){
           const buf=new Uint8Array(await f.arrayBuffer());
           const sigPng = buf.length>7 && buf[0]===0x89&&buf[1]===0x50&&buf[2]===0x4E&&buf[3]===0x47;
           const sigJpg = buf.length>2 && buf[0]===0xFF&&buf[1]===0xD8&&buf[2]===0xFF;
-          // Downscale via canvas keeps file sizes small; native embed (no canvas) is the reliable fallback.
+          // Downscale via canvas FIRST (caps at 2200px) so large screenshots/PNGs don't blow up tab memory during save; native embed is the fallback when canvas is unavailable.
           const viaCanvas = async()=> merged.embedJpg(await imageFileToJpegBytes(f));
           const viaNative = async()=> sigPng ? merged.embedPng(buf) : (sigJpg ? merged.embedJpg(buf) : null);
-          // PNGs are most reliable embedded natively; photos (JPEG/other) go through the downscaler first.
-          const order = sigPng ? [viaNative, viaCanvas] : [viaCanvas, viaNative];
+          const order = [viaCanvas, viaNative];
           let img=null;
           for(const attempt of order){ if(img) break; try{ img=await attempt(); }catch(e){ img=null; } }
           if(img){
