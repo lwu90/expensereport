@@ -761,7 +761,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260827-1600-AIoff";
+const APP_VERSION = "v20260827-1630-AIon";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -772,9 +772,8 @@ const APP_VERSION = "v20260827-1600-AIoff";
 const AI_PROXY_URL = "https://roots-expense-ai.lwu-ccd.workers.dev";
 const AI_APP_TOKEN = "";
 const AI_ENABLED = !!AI_PROXY_URL;
-// TEMPORARY: show the AI button but keep it disabled ("coming soon") until the Claude API is live.
-// Flip this to false to turn AI scanning back on. No other changes needed.
-const AI_COMING_SOON = true;
+// Flip this to true to show the AI button disabled ("coming soon"); false = AI scanning live.
+const AI_COMING_SOON = false;
 const DEPARTMENTS_NEEDING_LOCATION = ["Stores", "Partners and Other", "Head Office"];
 
 // Functions whose location/department code is a fixed dropdown (code is the option value; label shows "code - name").
