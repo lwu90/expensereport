@@ -677,10 +677,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var r,n,i,a,
         <span class="t">Statement file(s)</span>
         <span style="font-size:12px;color:var(--muted)" data-ccstmtcount>0 file(s) &middot; 20 MB max each</span>
       </div>
-      <input type="file" id="ccStmtInput" multiple class="hidden" />
+      <input type="file" id="ccStmtInput" multiple accept="image/*,.pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="hidden" />
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button type="button" class="btn-secondary" id="ccStmtAdd" style="padding:9px 16px">Upload statement</button>
       </div>
+      <div class="helper" style="margin-top:6px">Accepted: <strong>PDF</strong>, <strong>images</strong> (JPG, PNG, HEIC), or <strong>Word (.docx)</strong>. 20 MB each. Anything else is declined on upload.</div>
       <div class="filelist" id="ccStmtList"></div>
     </div>
   </section>
@@ -761,7 +762,7 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_FILES_PER_ITEM = 5;
 const MILEAGE_RATE = 0.50;       // CAD per km, no tax
 // Form build version — BUMP THIS whenever the form changes (e.g., GL dropdowns). Format: v[Date]-[Time].
-const APP_VERSION = "v20260827-1630-AIon";
+const APP_VERSION = "v20260828-1430-AIon";
 
 /* ============================================================
    AI RECEIPT SCANNING (optional pilot) — Cloudflare Worker + Gemini
@@ -847,6 +848,8 @@ function ccRemitIsCorp(){ return ((document.querySelector('input[name="remitType
 function syncCcStmtVisibility(){ const sec=$("ccStatementSection"); if(sec) sec.style.display = ccRemitIsCorp() ? "" : "none"; }
 async function handleCcStmtFiles(fileList){
   for(const raw of fileList){
+    if(isLegacyDoc(raw)){ toast('Word files must be saved as .docx (not the older .doc format) \u2014 "'+(raw.name||"file")+'" was skipped.',true); continue; }
+    if(!isAcceptedUpload(raw)){ toast('"'+(raw.name||"file")+'" isn\u2019t a supported type. Please upload a PDF, an image, or a Word (.docx) file.',true); continue; }
     let f=raw;
     if(isHeic(f)){ toast("Converting photo to JPEG…"); f=await convertIfHeic(f); }
     if(f.size>MAX_FILE_BYTES){ toast('"'+f.name+'" exceeds 20 MB and was skipped.',true); continue; }
@@ -864,7 +867,7 @@ function renderCcStmt(){
     </div>`).join("");
   list.querySelectorAll("[data-rmccstmt]").forEach(btn=>btn.addEventListener("click",()=>{ ccStatementFiles.splice(Number(btn.dataset.rmccstmt),1); renderCcStmt(); }));
   const c=document.querySelector("[data-ccstmtcount]");
-  if(c) c.innerHTML=ccStatementFiles.length+" file(s) &middot; 20 MB max each";
+  if(c) c.innerHTML=ccStatementFiles.length+" file(s) &middot; 20 MB max &middot; PDF, image, or .docx";
 }
 
 (function(){
@@ -956,15 +959,16 @@ function itemTemplate(internalId){
         <div class="files" data-mode="invoice">
           <div class="files-head">
             <span class="t">Backup / receipts (attachments specific to this expense item)</span>
-            <span style="font-size:12px;color:var(--muted)" data-filecount>0 / ${MAX_FILES_PER_ITEM} &middot; 20 MB max each</span>
+            <span style="font-size:12px;color:var(--muted)" data-filecount>0 / ${MAX_FILES_PER_ITEM} &middot; 20 MB max &middot; PDF, image, or .docx</span>
           </div>
-          <input type="file" data-fileinput multiple class="hidden" />
+          <input type="file" data-fileinput multiple accept="image/*,.pdf,application/pdf,.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" class="hidden" />
           <input type="file" data-camerainput accept="image/*" capture="environment" class="hidden" />
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button type="button" class="btn-secondary" data-fileadd style="padding:9px 16px">Upload receipt</button>
             <button type="button" class="btn-secondary mobile-only" data-cameraadd style="padding:9px 16px">Take photo</button>
             ${AI_ENABLED ? (AI_COMING_SOON ? '<button type="button" class="btn-secondary" data-aiscan style="padding:9px 16px" disabled title="AI receipt scanning is coming soon">AI Scan - Coming Soon!</button>' : '<button type="button" class="btn-secondary" data-aiscan style="padding:9px 16px">\u2728 Scan receipt with AI</button>') : ''}
           </div>
+          <div class="helper" style="margin-top:6px">Accepted: <strong>PDF</strong>, <strong>images</strong> (JPG, PNG, HEIC), or <strong>Word (.docx)</strong>. Up to ${MAX_FILES_PER_ITEM} files, 20 MB each. Anything else is declined on upload.</div>
           ${AI_ENABLED ? '<div class="helper" data-aistatus style="margin-top:6px"></div>' : ''}
           <div class="filelist" data-filelist></div>
         </div>
@@ -1219,10 +1223,98 @@ async function convertIfHeic(file){
   }catch(e){ console.warn("HEIC conversion failed",e); return file; }
 }
 
+let _mammothLoader=null;
+function loadMammoth(){
+  if(typeof mammoth!=="undefined") return Promise.resolve(true);
+  if(_mammothLoader) return _mammothLoader;
+  _mammothLoader=new Promise(resolve=>{
+    try{
+      const s=document.createElement("script");
+      s.src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js";
+      s.onload=()=>resolve(true); s.onerror=()=>resolve(false);
+      document.head.appendChild(s);
+    }catch(e){ resolve(false); }
+  });
+  return _mammothLoader;
+}
+
+// Convert a .docx into an ordered list of {type:"text"|"img"} blocks (preserves reading order).
+async function docxBlocks(f){
+  const ok=await loadMammoth();
+  if(!ok || typeof mammoth==="undefined") throw new Error("Word converter could not be loaded (check your connection).");
+  const ab=await f.arrayBuffer();
+  const opts={ convertImage: mammoth.images.imgElement(function(image){ return image.read("base64").then(function(b64){ return { src:"data:"+image.contentType+";base64,"+b64 }; }); }) };
+  const result=await mammoth.convertToHtml({arrayBuffer:ab}, opts);
+  const d=new DOMParser().parseFromString(result.value||"", "text/html");
+  const blocks=[]; let buf="";
+  function flush(){ const t=buf.replace(/[ \t]+/g," ").replace(/\n{2,}/g,"\n").trim(); if(t) blocks.push({type:"text",text:t}); buf=""; }
+  function walk(node){
+    node.childNodes.forEach(function(ch){
+      if(ch.nodeType===3){ buf+=ch.nodeValue; return; }
+      if(ch.nodeType!==1) return;
+      const tag=ch.tagName.toUpperCase();
+      if(tag==="IMG"){ flush(); const src=ch.getAttribute("src")||""; if(src) blocks.push({type:"img",src:src}); return; }
+      if(tag==="BR"){ buf+="\n"; return; }
+      const isBlock=/^(P|DIV|LI|UL|OL|H1|H2|H3|H4|H5|H6|TABLE|TR|TD|TH|SECTION|ARTICLE|BLOCKQUOTE)$/.test(tag);
+      if(isBlock) flush();
+      walk(ch);
+      if(isBlock) flush();
+    });
+  }
+  walk(d.body); flush();
+  return blocks;
+}
+
+// Embed one data-URL image into the merged doc (canvas downscale first, native fallback).
+async function embedDocImage(merged, src){
+  const bytes=dataUrlToBytes(src);
+  const semi=src.indexOf(";"); const mime=(semi>5?src.slice(5,semi):"image/png");
+  const sigPng=bytes.length>7&&bytes[0]===0x89&&bytes[1]===0x50&&bytes[2]===0x4E&&bytes[3]===0x47;
+  const sigJpg=bytes.length>2&&bytes[0]===0xFF&&bytes[1]===0xD8&&bytes[2]===0xFF;
+  try{
+    const file=new File([bytes], "doc-image"+(sigPng?".png":".jpg"), {type:mime});
+    return await merged.embedJpg(await imageFileToJpegBytes(file));
+  }catch(e){}
+  if(sigPng){ const pw=(bytes[16]<<24|bytes[17]<<16|bytes[18]<<8|bytes[19])>>>0, ph=(bytes[20]<<24|bytes[21]<<16|bytes[22]<<8|bytes[23])>>>0; if(pw>0&&ph>0&&pw*ph>4000000) return null; return await merged.embedPng(bytes); }
+  if(sigJpg) return await merged.embedJpg(bytes);
+  return null;
+}
+
+// Flow a .docx's text + images onto A4 pages. Returns the index of its first page.
+async function renderWordInto(merged, f, baseLabel, sub, ctx){
+  const {PAGE_W,PAGE_H,M,HB,reg,header,rgb,embedDocImage:embImg}=ctx;
+  const blocks=await docxBlocks(f);
+  const CW=PAGE_W-2*M, TOP=PAGE_H-HB-M, BOT=M, FS=11, LH=15, GAP=8;
+  let page=null, y=0, first=-1, pageNo=0;
+  function newPage(){ pageNo++; const lbl=baseLabel+(pageNo>1?(" (cont. "+pageNo+")"):""); page=merged.addPage([PAGE_W,PAGE_H]); if(first<0) first=merged.getPageCount()-1; header(page,lbl,sub); y=TOP; }
+  function ensure(h){ if(!page || (y-h)<BOT) newPage(); }
+  function wrap(text){ const words=text.split(/\s+/); const lines=[]; let line=""; words.forEach(function(w){ const t=line?line+" "+w:w; if(line && reg.widthOfTextAtSize(t,FS)>CW){ lines.push(line); line=w; } else line=t; }); if(line) lines.push(line); return lines; }
+  if(!blocks.length){ newPage(); page.drawText(sanitizeWinAnsi("(The Word document contained no readable content.)"),{x:M,y:y-FS,size:FS,font:reg,color:rgb(0.4,0.4,0.4)}); return first; }
+  for(const b of blocks){
+    if(b.type==="text"){
+      const paras=sanitizeWinAnsi(b.text).split("\n");
+      for(const para of paras){ const lines=wrap(para); for(const ln of lines){ ensure(LH); page.drawText(ln,{x:M,y:y-FS,size:FS,font:reg,color:rgb(0.12,0.12,0.12)}); y-=LH; } }
+      y-=GAP;
+    } else {
+      let img=null; try{ img=await embImg(b.src); }catch(e){ img=null; }
+      if(!img){ ensure(LH); page.drawText("[an image in the document could not be embedded]",{x:M,y:y-FS,size:FS,font:reg,color:rgb(0.6,0.15,0.15)}); y-=LH; continue; }
+      const availH=PAGE_H-HB-2*M; let w=img.width, h=img.height;
+      let s=Math.min(CW/w,1); w*=s; h*=s;
+      if(h>availH){ const s2=availH/h; w*=s2; h*=s2; }
+      ensure(h+GAP);
+      page.drawImage(img,{x:(PAGE_W-w)/2, y:y-h, width:w, height:h});
+      y-=h+GAP;
+    }
+  }
+  return first;
+}
+
 async function handleFiles(id,fileList){
   const cur=itemFiles[id]||(itemFiles[id]=[]);
   for(const raw of fileList){
     if(cur.length>=MAX_FILES_PER_ITEM){ toast("Max "+MAX_FILES_PER_ITEM+" files per item.",true); break; }
+    if(isLegacyDoc(raw)){ toast('Word files must be saved as .docx (not the older .doc format) \u2014 "'+(raw.name||"file")+'" was skipped.',true); continue; }
+    if(!isAcceptedUpload(raw)){ toast('"'+(raw.name||"file")+'" isn\u2019t a supported type. Please upload a PDF, an image, or a Word (.docx) file.',true); continue; }
     let f=raw;
     if(isHeic(f)){ toast("Converting photo to JPEG…"); f=await convertIfHeic(f); }
     if(f.size>MAX_FILE_BYTES){ toast('"'+f.name+'" exceeds 20 MB and was skipped.',true); continue; }
@@ -1244,7 +1336,7 @@ function renderFiles(id){
       <span style="display:flex;align-items:center;gap:10px;flex:none"><span class="fsize">${fileSizeLabel(f.size)}</span><button type="button" class="btn-link" data-rmfile="${i}">Remove</button></span>
     </div>`).join("");
   list.querySelectorAll("[data-rmfile]").forEach(btn=>btn.addEventListener("click",()=>{ itemFiles[id].splice(Number(btn.dataset.rmfile),1); renderFiles(id); }));
-  node.querySelector("[data-filecount]").innerHTML=files.length+" / "+MAX_FILES_PER_ITEM+" &middot; 20 MB max each";
+  node.querySelector("[data-filecount]").innerHTML=files.length+" / "+MAX_FILES_PER_ITEM+" &middot; 20 MB max &middot; PDF, image, or .docx";
   const aibtn=node.querySelector("[data-aiscan]");
   if(aibtn && !AI_COMING_SOON){
     if(files.length>1){ aibtn.disabled=true; aibtn.textContent="AI Unavailable on Multiple Receipts"; }
@@ -1648,7 +1740,38 @@ function addApSummaryPage(doc, data){
 /* ---- Attachment embedding helpers (pdf-lib) ---- */
 function isImageFile(f){ return /^image\//.test(f.type||"") || /\.(png|jpe?g|gif|webp|bmp)$/i.test(f.name||""); }
 function isPdfFile(f){ return (f.type||"")==="application/pdf" || /\.pdf$/i.test(f.name||""); }
+function isWordFile(f){ return (f.type||"")==="application/vnd.openxmlformats-officedocument.wordprocessingml.document" || /\.docx$/i.test(f.name||""); }
+function isLegacyDoc(f){ return (f.type||"")==="application/msword" || (/\.doc$/i.test(f.name||"") && !/\.docx$/i.test(f.name||"")); }
+function isAcceptedUpload(f){ return isImageFile(f) || isHeic(f) || isPdfFile(f) || isWordFile(f); }
 function truncate(s,n){ s=s||""; return s.length>n ? s.slice(0,n-1)+"…" : s; }
+function wrapToWidth(text, font, size, maxW){
+  const words=String(text==null?"":text).split(/\s+/); const lines=[]; let line="";
+  words.forEach(function(w){ const t=line?line+" "+w:w; if(line && font.widthOfTextAtSize(t,size)>maxW){ lines.push(line); line=w; } else line=t; });
+  if(line) lines.push(line); return lines.length?lines:[""];
+}
+// Map an attachment embed failure to a short fault code + a plain-language detail.
+function classifyFault(f, embedErr){
+  const e=(embedErr||"").toLowerCase();
+  if(isWordFile(f)){
+    if(/could not be loaded|mammoth/.test(e)) return ["DOCX-LOADER", embedErr||"The Word converter could not be loaded \u2014 the device may be offline or the converter download was blocked by the network."];
+    return ["DOCX-RENDER", embedErr||"The Word (.docx) file could not be converted \u2014 it may be a legacy .doc renamed to .docx, password-protected, or corrupted."];
+  }
+  if(isPdfFile(f)){
+    if(/encrypt|password/.test(e)) return ["PDF-ENCRYPTED", embedErr||"The PDF appears to be password-protected or encrypted and could not be opened."];
+    if(/allocation|out of memory|heap|array buffer/.test(e)) return ["PDF-MEMORY", embedErr||"The browser ran out of memory while merging this PDF \u2014 try fewer/smaller attachments, or build the report on a desktop browser."];
+    if(/parse|invalid|stream|trailer|xref|header|unexpected|corrupt/.test(e)) return ["PDF-PARSE", embedErr||"The PDF structure could not be parsed \u2014 it may be damaged or incompletely downloaded."];
+    return ["PDF-EMBED", embedErr||"The PDF pages could not be copied into the report."];
+  }
+  if(isImageFile(f)||isHeic(f)){
+    if(!embedErr) return ["IMG-OVERSIZE", "The image is too large to embed in this browser (over ~4 megapixels). Re-save it smaller, or export it as a JPG."];
+    if(/allocation|out of memory|heap|array buffer/.test(e)) return ["IMG-MEMORY", embedErr];
+    if(/winansi|encode/.test(e)) return ["TEXT-ENCODING", embedErr];
+    if(isHeic(f)) return ["IMG-HEIC", embedErr||"This HEIC photo could not be converted to JPEG \u2014 re-save it as JPG or PNG and attach that."];
+    return ["IMG-DECODE", embedErr||"The image could not be decoded or embedded \u2014 the file may be corrupted or an unsupported image type."];
+  }
+  if(!embedErr) return ["FORMAT-UNSUPPORTED", "This file type is not supported. Accepted formats: PDF, images (JPG/PNG/HEIC), or Word (.docx)."];
+  return ["EMBED-ERROR", embedErr];
+}
 
 // Re-encode any raster image to JPEG bytes via canvas (handles png/jpg/gif/webp/bmp), capped to keep size sane.
 function dataUrlToBytes(dataUrl){
@@ -1693,6 +1816,7 @@ function imageFileToJpegBytes(file){
 async function buildFullPdfBytes(data){
   if(!window.jspdf) throw new Error("jsPDF not loaded");
   const linkBoxes=[];
+  const embedNotes=[]; // attachments that couldn't be embedded, with the real reason
   const summaryBytes=buildPdf(data, linkBoxes).output("arraybuffer");
   if(!window.PDFLib) return new Uint8Array(summaryBytes); // graceful: summary only if pdf-lib missing
   const { PDFDocument, StandardFonts, rgb } = PDFLib;
@@ -1744,7 +1868,7 @@ async function buildFullPdfBytes(data){
       const f=ccStatementFiles[i], many=ccStatementFiles.length>1;
       const label="Corporate Credit Card Statement"+(many?" ("+(i+1)+"/"+ccStatementFiles.length+")":"");
       const sub=f.name;
-      let handled=false;
+      let handled=false, embedErr="";
       if(isImageFile(f)){
         try{
           const buf=new Uint8Array(await f.arrayBuffer());
@@ -1765,20 +1889,30 @@ async function buildFullPdfBytes(data){
             page.drawImage(img,{x:(PAGE_W-w)/2, y:M+((ah-h)/2), width:w, height:h});
             handled=true;
           }
-        }catch(e){ console.warn("cc statement image embed failed",e); }
+        }catch(e){ embedErr=(e&&e.message)||String(e); console.warn("cc statement image embed failed",e); }
       } else if(isPdfFile(f)){
         try{
           const src=await PDFDocument.load(await f.arrayBuffer(),{ignoreEncryption:true});
           const copied=await merged.copyPages(src, src.getPageIndices());
           copied.forEach((p,idx)=>{ merged.addPage(p); header(p, label+(copied.length>1?(" p."+(idx+1)+"/"+copied.length):""), sub); });
           handled=true;
-        }catch(e){ console.warn("cc statement pdf merge failed",e); }
+        }catch(e){ embedErr=(e&&e.message)||String(e); console.warn("cc statement pdf merge failed",e); }
+      } else if(isWordFile(f)){
+        try{
+          await renderWordInto(merged, f, label, sub, {PAGE_W,PAGE_H,M,HB,reg,header,rgb,embedDocImage:(src)=>embedDocImage(merged,src)});
+          handled=true;
+        }catch(e){ embedErr=(e&&e.message)||String(e); console.warn("cc statement word render failed",e); }
       }
       if(!handled){
         const page=merged.addPage([PAGE_W,PAGE_H]);
         header(page,label,sub);
-        page.drawText("This statement file can't be rendered in the PDF.",{x:M,y:PAGE_H-HB-56,size:12,font:reg,color:rgb(0.1,0.1,0.1)});
-        page.drawText(sanitizeWinAnsi("The original file is named "+f.name+"."),{x:M,y:PAGE_H-HB-76,size:11,font:reg,color:rgb(0.35,0.35,0.35)});
+        const fault=classifyFault(f, embedErr);
+        page.drawText(sanitizeWinAnsi("Attachment couldn\u2019t be embedded \u2014 Fault code: "+fault[0]),{x:M,y:PAGE_H-HB-56,size:12,font:bold,color:rgb(0.55,0.12,0.12)});
+        page.drawText(sanitizeWinAnsi("Original file: "+(f.name||"(unnamed)")),{x:M,y:PAGE_H-HB-76,size:11,font:reg,color:rgb(0.35,0.35,0.35)});
+        let yy=PAGE_H-HB-96;
+        wrapToWidth("Details: "+fault[1], reg, 9, PAGE_W-2*M).forEach(ln=>{ page.drawText(sanitizeWinAnsi(ln),{x:M,y:yy,size:9,font:reg,color:rgb(0.45,0.45,0.45)}); yy-=12; });
+        page.drawText(sanitizeWinAnsi("Tip: fix the file and re-attach, or if it persists, screenshot this page and send it to Finance."),{x:M,y:yy-6,size:9,font:reg,color:rgb(0.55,0.55,0.55)});
+        embedNotes.push(label+" \u2014 "+(f.name||"")+" [fault "+fault[0]+"]: "+fault[1]);
       }
     }
   }
@@ -1788,7 +1922,7 @@ async function buildFullPdfBytes(data){
     const files=itemFiles[r.iid]||[];
     for(let i=0;i<files.length;i++){
       const f=files[i], label=fileTag(r.id,i), sub=f.name;
-      let handled=false;
+      let handled=false, embedErr="";
       if(isImageFile(f)){
         try{
           const buf=new Uint8Array(await f.arrayBuffer());
@@ -1810,7 +1944,7 @@ async function buildFullPdfBytes(data){
             page.drawImage(img,{x:(PAGE_W-w)/2, y:M+((ah-h)/2), width:w, height:h});
             handled=true;
           }
-        }catch(e){ console.warn("image embed failed",label,e); }
+        }catch(e){ embedErr=(e&&e.message)||String(e); console.warn("image embed failed",label,e); }
       } else if(isPdfFile(f)){
         try{
           const src=await PDFDocument.load(await f.arrayBuffer(),{ignoreEncryption:true});
@@ -1818,14 +1952,25 @@ async function buildFullPdfBytes(data){
           tagToPage[label]=merged.getPageCount();
           copied.forEach((p,idx)=>{ merged.addPage(p); header(p, label+(copied.length>1?(" ("+(idx+1)+"/"+copied.length+")"):""), sub); });
           handled=true;
-        }catch(e){ console.warn("pdf merge failed",label,e); }
+        }catch(e){ embedErr=(e&&e.message)||String(e); console.warn("pdf merge failed",label,e); }
+      } else if(isWordFile(f)){
+        try{
+          tagToPage[label]=merged.getPageCount();
+          await renderWordInto(merged, f, label, sub, {PAGE_W,PAGE_H,M,HB,reg,header,rgb,embedDocImage:(src)=>embedDocImage(merged,src)});
+          handled=true;
+        }catch(e){ embedErr=(e&&e.message)||String(e); console.warn("word render failed",label,e); }
       }
       if(!handled){
         tagToPage[label]=merged.getPageCount();
         const page=merged.addPage([PAGE_W,PAGE_H]);
         header(page,label,sub);
-        page.drawText("This attachment can't be rendered in the PDF.",{x:M,y:PAGE_H-HB-56,size:12,font:reg,color:rgb(0.1,0.1,0.1)});
-        page.drawText(sanitizeWinAnsi("The original file is named "+label+ext(f.name)+"."),{x:M,y:PAGE_H-HB-76,size:11,font:reg,color:rgb(0.35,0.35,0.35)});
+        const fault=classifyFault(f, embedErr);
+        page.drawText(sanitizeWinAnsi("Attachment couldn\u2019t be embedded \u2014 Fault code: "+fault[0]),{x:M,y:PAGE_H-HB-56,size:12,font:bold,color:rgb(0.55,0.12,0.12)});
+        page.drawText(sanitizeWinAnsi("Original file: "+(f.name||(label+ext(f.name)))),{x:M,y:PAGE_H-HB-76,size:11,font:reg,color:rgb(0.35,0.35,0.35)});
+        let yy=PAGE_H-HB-96;
+        wrapToWidth("Details: "+fault[1], reg, 9, PAGE_W-2*M).forEach(ln=>{ page.drawText(sanitizeWinAnsi(ln),{x:M,y:yy,size:9,font:reg,color:rgb(0.45,0.45,0.45)}); yy-=12; });
+        page.drawText(sanitizeWinAnsi("Tip: fix the file and re-attach, or if it persists, screenshot this page and send it to Finance."),{x:M,y:yy-6,size:9,font:reg,color:rgb(0.55,0.55,0.55)});
+        embedNotes.push(label+" \u2014 "+(f.name||"")+" [fault "+fault[0]+"]: "+fault[1]);
       }
     }
   }
@@ -1841,6 +1986,13 @@ async function buildFullPdfBytes(data){
     addInternalLink(srcPage, [b.x-1, H-(b.yTop+b.h), b.x+b.w+1, H-b.yTop+1], targetPage);
   });
 
+  if(embedNotes.length){
+    const msg="Some attachments couldn't be embedded and were shown as placeholder pages:\n\n"+embedNotes.join("\n")
+      +"\n\nThe report was still built. If you can, please screenshot this and send it so the cause can be fixed.";
+    console.warn(msg);
+    toast(embedNotes.length+" attachment(s) couldn't be embedded — see the placeholder pages.", true);
+    try{ alert(msg); }catch(_){}
+  }
   return await merged.save();
 }
 
